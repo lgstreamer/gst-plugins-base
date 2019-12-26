@@ -29,10 +29,13 @@ G_BEGIN_DECLS
     "video/x-raw(ANY); " \
     "audio/x-raw(ANY); " \
     "text/x-raw(ANY); " \
+    "text/x-gst-fourcc-stpp; " \
+    "text/x-gst-fourcc-dfxp; " \
     "subpicture/x-dvd; " \
     "subpicture/x-dvb; " \
     "subpicture/x-xsub; " \
-    "subpicture/x-pgs"
+    "subpicture/x-pgs; " \
+    "application/ttml+xml"
 
 G_END_DECLS
 

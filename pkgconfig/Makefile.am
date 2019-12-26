@@ -11,7 +11,8 @@ pcverfiles =  \
 	gstreamer-sdp-@GST_API_VERSION@.pc \
 	gstreamer-tag-@GST_API_VERSION@.pc \
 	gstreamer-video-@GST_API_VERSION@.pc \
-	gstreamer-plugins-base-@GST_API_VERSION@.pc
+	gstreamer-plugins-base-@GST_API_VERSION@.pc \
+	gstreamer-subtitle-@GST_API_VERSION@.pc
 pcverfiles_uninstalled = \
 	gstreamer-allocators-@GST_API_VERSION@-uninstalled.pc \
 	gstreamer-audio-@GST_API_VERSION@-uninstalled.pc \
@@ -24,7 +25,8 @@ pcverfiles_uninstalled = \
 	gstreamer-sdp-@GST_API_VERSION@-uninstalled.pc \
 	gstreamer-tag-@GST_API_VERSION@-uninstalled.pc \
 	gstreamer-video-@GST_API_VERSION@-uninstalled.pc \
-	gstreamer-plugins-base-@GST_API_VERSION@-uninstalled.pc
+	gstreamer-plugins-base-@GST_API_VERSION@-uninstalled.pc \
+	gstreamer-subtitle-@GST_API_VERSION@-uninstalled.pc
 
 if HAVE_GST_GL
 pcverfiles += gstreamer-gl-@GST_API_VERSION@.pc
@@ -56,6 +58,7 @@ cp_verbose_0 = @echo "  CP     $@";
 		-e "s|[@]taglibdir[@]|$(abs_top_builddir)/gst-libs/gst/tag/.libs|" \
 		-e "s|[@]videolibdir[@]|$(abs_top_builddir)/gst-libs/gst/video/.libs|" \
 		-e "s|[@]gllibdir[@]|$(abs_top_builddir)/gst-libs/gst/gl/.libs|" \
+		-e "s|[@]subtitlelibdir[@]|$(abs_top_builddir)/gst-libs/gst/subtitle/.libs|" \
 		$< > $@.tmp && mv $@.tmp $@
 
 pkgconfigdir = $(libdir)/pkgconfig
@@ -75,7 +78,8 @@ pcinfiles = \
            gstreamer-tag.pc.in gstreamer-tag-uninstalled.pc.in \
            gstreamer-video.pc.in gstreamer-video-uninstalled.pc.in \
            gstreamer-gl.pc.in gstreamer-gl-uninstalled.pc.in \
-           gstreamer-plugins-base.pc.in gstreamer-plugins-base-uninstalled.pc.in
+           gstreamer-plugins-base.pc.in gstreamer-plugins-base-uninstalled.pc.in \
+           gstreamer-subtitle.pc.in gstreamer-subtitle-uninstalled.pc.in
 
 DISTCLEANFILES = $(pcinfiles:.in=)
 EXTRA_DIST = $(pcinfiles)

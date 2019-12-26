@@ -105,6 +105,15 @@ gboolean         gst_play_sink_reconfigure    (GstPlaySink * playsink);
 
 gboolean         gst_play_sink_plugin_init    (GstPlugin * plugin);
 
+void             gst_play_sink_set_queue_max_size_buffers (GstPlaySink *playsink, GstPlaySinkType type,
+		                                           guint max_size_buffers, guint max_size_bytes,
+							   guint64 max_size_time, gboolean increase);
+guint            gst_play_sink_get_queue_max_size_buffers (GstPlaySink *playsink, GstPlaySinkType type,
+		                                           guint * max_bytes, guint64 * max_time);
+
+void             gst_play_sink_set_dvr_playback     (GstPlaySink *playsink, gboolean dvr);
+gboolean         gst_play_sink_get_dvr_playback     (GstPlaySink *playsink);
+
 G_END_DECLS
 
 #endif /* __GST_PLAY_SINK_H__ */

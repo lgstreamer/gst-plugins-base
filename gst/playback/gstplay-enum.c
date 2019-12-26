@@ -69,6 +69,11 @@ gst_play_flags_get_type (void)
         "soft-colorbalance"},
     {C_FLAGS (GST_PLAY_FLAG_FORCE_FILTERS),
         "Force audio/video filter(s) to be applied", "force-filters"},
+    {C_FLAGS (GST_PLAY_FLAG_NATIVE_TEXT), "Only use native text formats",
+        "native-text"},
+    {C_FLAGS (GST_PLAY_FLAG_FORCE_AUDIO_CONVERT),
+          "Only use audio convert and audio resample",
+        "force-audio-convert"},
     {0, NULL, NULL}
   };
   static volatile GType id = 0;

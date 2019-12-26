@@ -161,11 +161,6 @@ static const GstRTPPayloadInfo info[] = {
   {G_MAXUINT8, "video", "X-SV3V-ES", 90000, NULL, 0},
   {G_MAXUINT8, "video", "X-SORENSON-VIDEO", 90000, NULL, 0},
 
-  /* real stuff */
-  {G_MAXUINT8, "video", "x-pn-realvideo", 1000, NULL, 0},
-  {G_MAXUINT8, "audio", "x-pn-realaudio", 1000, NULL, 0},
-  {G_MAXUINT8, "application", "x-pn-realmedia", 1000, NULL, 0},
-
   /* terminator */
   {G_MAXUINT8, NULL, NULL, 0, NULL, 0}
 };

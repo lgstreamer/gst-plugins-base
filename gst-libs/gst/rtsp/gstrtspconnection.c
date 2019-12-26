@@ -59,6 +59,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 /* we include this here to get the G_OS_* defines */
 #include <glib.h>
@@ -1195,6 +1198,9 @@ error:
     } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
       g_clear_error (&err);
       return GST_RTSP_EINTR;
+    } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_BUSY)) {
+      g_clear_error (&err);
+      return GST_RTSP_EINTR;
     } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_TIMED_OUT)) {
       g_clear_error (&err);
       return GST_RTSP_ETIMEOUT;
@@ -1327,6 +1333,9 @@ error:
       g_clear_error (&err);
       return GST_RTSP_EINTR;
     } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
+      g_clear_error (&err);
+      return GST_RTSP_EINTR;
+    } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_BUSY)) {
       g_clear_error (&err);
       return GST_RTSP_EINTR;
     } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_TIMED_OUT)) {
@@ -4006,4 +4015,88 @@ gst_rtsp_watch_set_flushing (GstRTSPWatch * watch, gboolean flushing)
     g_queue_clear (watch->messages);
   }
   g_mutex_unlock (&watch->mutex);
+}
+
+/**
+ * gst_rtsp_connection_remove_drmheader:
+ * @conn: a #GstRTSPConnection
+ * @drm_header: DRM Header String of SKB VOD Stream
+ * @timeout: a timeout value or #NULL
+ *
+ * This function tries to remvove @drm_header data from SKB VOD stream.
+ *
+ * Returns: #GST_RTSP_OK on success.
+ */
+GstRTSPResult
+gst_rtsp_connection_remove_drmheader (GstRTSPConnection * conn,
+    const gchar * drm_header, GTimeVal * timeout)
+{
+  GError *err = NULL;
+  GstRTSPResult res = GST_RTSP_OK;
+  GstRTSPBuilder builder;
+  gboolean ret;
+
+  int i, drmheader_size = 0;
+  guint8 c;
+  gchar temp_str[3] = { 0 };
+  GstClockTime clock_timeout;
+
+  g_return_val_if_fail (conn != NULL, GST_RTSP_EINVAL);
+  g_return_val_if_fail (drm_header != NULL, GST_RTSP_EINVAL);
+  g_return_val_if_fail (conn->read_socket != NULL, GST_RTSP_EINVAL);
+
+  clock_timeout =
+      timeout ? GST_TIMEVAL_TO_TIME (*timeout) : GST_CLOCK_TIME_NONE;
+  memset (&builder, 0, sizeof (GstRTSPBuilder));
+  drmheader_size = strlen (drm_header) / 2;
+
+  for (i = 0; i < drmheader_size; i++) {
+
+    builder.offset = 0;
+    while (TRUE) {
+      res = read_bytes (conn, (guint8 *) builder.buffer, &builder.offset, 1,
+          TRUE);
+      if (res == GST_RTSP_OK) {
+        break;
+      } else if (res == GST_RTSP_EINTR) {
+        g_socket_set_timeout (conn->read_socket,
+            (clock_timeout + GST_SECOND - 1) / GST_SECOND);
+        ret =
+            g_socket_condition_wait (conn->read_socket,
+            G_IO_IN | G_IO_PRI | G_IO_ERR | G_IO_HUP, conn->cancellable, &err);
+        if (!ret) {
+          g_socket_set_timeout (conn->read_socket, 0);
+
+          if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_clear_error (&err);
+            g_cancellable_reset (conn->cancellable);
+            continue;
+          } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
+            g_clear_error (&err);
+            continue;
+          } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_BUSY)) {
+            g_clear_error (&err);
+            return GST_RTSP_EINTR;
+          } else if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_TIMED_OUT)) {
+            g_clear_error (&err);
+            return GST_RTSP_ETIMEOUT;
+          }
+          g_clear_error (&err);
+          return GST_RTSP_ESYS;
+        }
+        g_socket_set_timeout (conn->read_socket, 0);
+      } else if (res < 0) {
+        return res;
+      }
+    }
+
+    c = builder.buffer[0];
+    sprintf (temp_str, "%02x", c);
+    if (!(temp_str[0] == drm_header[i * 2]
+            && temp_str[1] == drm_header[i * 2 + 1])) {
+      res = GST_RTSP_ERROR;
+      return res;
+    }
+  }
+  return res;
 }

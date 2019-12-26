@@ -170,10 +170,13 @@ gst_gl_buffer_upload_cpu_write (GstGLBuffer * mem, GstMapInfo * info,
 {
   const GstGLFuncs *gl = mem->mem.context->gl_vtable;
   gpointer data;
+  gint64 start = 0, end = 0;
 
   if (!mem->mem.data)
     /* no data pointer has been written */
     return;
+
+  start = g_get_monotonic_time ();
 
   /* The extra data pointer indirection/memcpy is needed for coherent across
    * concurrent map()'s in both GL and CPU */
@@ -200,6 +203,11 @@ gst_gl_buffer_upload_cpu_write (GstGLBuffer * mem, GstMapInfo * info,
     }
     gl->BindBuffer (mem->target, 0);
   }
+
+  end = g_get_monotonic_time ();
+  GST_CAT_TRACE (GST_CAT_GL_BUFFER,
+      "log=GL_UPLOAD, term=%lld, time=%lld",
+      end - start, g_get_monotonic_time ());
 }
 
 static gpointer

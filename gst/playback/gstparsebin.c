@@ -139,6 +139,8 @@ typedef struct _GstParseBinClass GstParseBinClass;
 #define GST_PARSE_BIN_CLASS(klass)     (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_PARSE_BIN,GstParseBinClass))
 #define GST_IS_parse_bin(obj)          (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_PARSE_BIN))
 #define GST_IS_parse_bin_CLASS(klass)  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_PARSE_BIN))
+#define GST_PARSE_BIN_GET_CLASS(obj) \
+  (G_TYPE_INSTANCE_GET_CLASS((obj),GST_TYPE_PARSE_BIN, GstParseBinClass))
 
 /**
  *  GstParseBin:
@@ -185,6 +187,23 @@ struct _GstParseBin
                                  * before stopping the element.
                                  * Protected by the object lock */
 
+  GMutex compositor_lock;       /* Protects compositore during add bin */
+
+  gboolean have_compositor;
+  gboolean have_composite_stream;
+
+  gchar *fallback_element;      /* Add an element to last position before exposing */
+
+  GList *delayed_to_null;
+
+  /* for DSC case */
+  gulong block_flush_probe_id;
+  GstPad *demuxer_sink;
+  GMutex dsc_lock;              /* Protects flush */
+  GCond dsc_cond;
+  gboolean on_dsc;
+  gboolean flush_probed;
+  gboolean adaptive_mode;
 };
 
 struct _GstParseBinClass
@@ -213,6 +232,32 @@ struct _GstParseBinClass
 
   /* fired when the last group is drained */
   void (*drained) (GstElement * element);
+
+  /* Virtual Functions for webOS Platform */
+  void (*priv_parse_bin_init) (GstParseBin * parse_bin);
+  void (*priv_parse_bin_dispose) (GstParseBin * parse_bin);
+  void (*priv_parse_bin_finalize) (GstParseBin * parse_bin);
+  void (*priv_analyze_new_pad) (GstParseBin * parsebin, GstElement * src,
+      GstPad * pad, GstCaps * caps, GstParseChain * chain);
+    gboolean (*priv_connect_pad) (GstParseBin * parsebin, GstElement * src,
+      GstParsePad * parsepad, GstPad * pad, GstCaps * caps,
+      GValueArray * factories, GstParseChain * chain, gchar ** deadend_details);
+  void (*priv_query_smart_properties) (GstParseBin * parse_bin);
+  void (*priv_parse_chain_new) (GstParseChain * chain);
+  void (*priv_parse_chain_free) (GstParseChain * chain);
+    gboolean (*priv_have_composite_stream) (GstParseChain * chain);
+  void (*priv_build_fallback_elements) (GstParseBin * parsebin,
+      GList * endpads);
+  void (*priv_parse_bin_expose_compositor) (GstParseBin * parsebin);
+  void (*priv_parse_pad_update_tags) (GstParsePad * parsepad,
+      GstTagList * tags);
+  void (*priv_update_compsite_stream) (GstParsePad * parsepad,
+      const gchar * stream_id);
+  void (*priv_parse_pad_add_probe) (GstParsePad * parsepad, GstProxyPad * ppad);
+    GstPadProbeReturn (*priv_parse_pad_event) (GstParsePad * parsepad,
+      GstEvent * event, gboolean * steal);
+    gboolean (*priv_check_delayed_set_to_null) (GstParseChain * chain,
+      GstElement * element);
 };
 
 /* signals */
@@ -229,9 +274,6 @@ enum
 };
 
 #define DEFAULT_SUBTITLE_ENCODING NULL
-#define DEFAULT_USE_BUFFERING     FALSE
-#define DEFAULT_LOW_PERCENT       10
-#define DEFAULT_HIGH_PERCENT      99
 /* by default we use the automatic values above */
 #define DEFAULT_EXPOSE_ALL_STREAMS  TRUE
 #define DEFAULT_CONNECTION_SPEED    0
@@ -335,6 +377,23 @@ static GstStreamType guess_stream_type_from_caps (GstCaps * caps);
     g_mutex_unlock (&GST_PARSE_BIN_CAST(parsebin)->subtitle_lock);		\
 } G_STMT_END
 
+#define DSC_LOCK(parsebin) G_STMT_START {				\
+    GST_LOG_OBJECT (parsebin,						\
+		    "dsc locking from thread %p",			\
+		    g_thread_self ());					\
+    g_mutex_lock (&GST_PARSE_BIN_CAST(parsebin)->dsc_lock);		\
+    GST_LOG_OBJECT (parsebin,						\
+		    "dsc locked from thread %p",			\
+		    g_thread_self ());					\
+} G_STMT_END
+
+#define DSC_UNLOCK(parsebin) G_STMT_START {				\
+    GST_LOG_OBJECT (parsebin,						\
+		    "dsc unlocking from thread %p",			\
+		    g_thread_self ());					\
+    g_mutex_unlock (&GST_PARSE_BIN_CAST(parsebin)->dsc_lock);		\
+} G_STMT_END
+
 struct _GstPendingPad
 {
   GstPad *pad;
@@ -412,6 +471,16 @@ struct _GstParseChain
 
   /* FIXME: This should be done directly via a thread! */
   GList *old_groups;            /* Groups that should be freed later */
+
+  GstStreamType type;
+  GstElement *compositor;
+  gboolean main_input;
+  gboolean need_compositor;
+
+  GstElement *fallback_element;
+
+  /* FIXME: last parsed caps for delayed element to null */
+  GstCaps *last_caps;
 };
 
 static void gst_parse_chain_free (GstParseChain * chain);
@@ -502,6 +571,31 @@ static void gst_parse_bin_class_init (GstParseBinClass * klass);
 static void gst_parse_bin_init (GstParseBin * parse_bin);
 static void gst_parse_bin_dispose (GObject * object);
 static void gst_parse_bin_finalize (GObject * object);
+
+/********
+ * Discovery methods
+ *****/
+static gboolean is_demuxer_element (GstElement * srcelement);
+
+static gboolean connect_pad (GstParseBin * parsebin, GstElement * src,
+    GstParsePad * parsepad, GstPad * pad, GstCaps * caps,
+    GValueArray * factories, GstParseChain * chain, gchar ** deadend_details);
+static GList *connect_element (GstParseBin * parsebin, GstParseElement * pelem,
+    GstParseChain * chain);
+static void expose_pad (GstParseBin * parsebin, GstElement * src,
+    GstParsePad * parsepad, GstPad * pad, GstCaps * caps,
+    GstParseChain * chain);
+
+static void pad_added_cb (GstElement * element, GstPad * pad,
+    GstParseChain * chain);
+static void pad_removed_cb (GstElement * element, GstPad * pad,
+    GstParseChain * chain);
+static void no_more_pads_cb (GstElement * element, GstParseChain * chain);
+static GstParseGroup *gst_parse_chain_get_current_group (GstParseChain * chain);
+
+#ifdef HAVE_PRIV_FUNC
+#include "gstparsebin-tv.c"
+#endif
 
 static GType
 gst_parse_bin_get_type (void)
@@ -869,6 +963,25 @@ gst_parse_bin_class_init (GstParseBinClass * klass)
   gstbin_klass->handle_message =
       GST_DEBUG_FUNCPTR (gst_parse_bin_handle_message);
 
+#ifdef HAVE_PRIV_FUNC
+  klass->priv_parse_bin_init = priv_parse_bin_init;
+  klass->priv_parse_bin_dispose = priv_parse_bin_dispose;
+  klass->priv_parse_bin_finalize = priv_parse_bin_finalize;
+  klass->priv_analyze_new_pad = priv_analyze_new_pad;
+  klass->priv_connect_pad = priv_connect_pad;
+  klass->priv_query_smart_properties = priv_query_smart_properties;
+  klass->priv_parse_chain_new = priv_parse_chain_new;
+  klass->priv_parse_chain_free = priv_parse_chain_free;
+  klass->priv_have_composite_stream = priv_have_composite_stream;
+  klass->priv_build_fallback_elements = priv_build_fallback_elements;
+  klass->priv_parse_bin_expose_compositor = priv_parse_bin_expose_compositor;
+  klass->priv_parse_pad_update_tags = priv_parse_pad_update_tags;
+  klass->priv_update_compsite_stream = priv_update_compsite_stream;
+  klass->priv_parse_pad_add_probe = priv_parse_pad_add_probe;
+  klass->priv_parse_pad_event = priv_parse_pad_event;
+  klass->priv_check_delayed_set_to_null = priv_check_delayed_set_to_null;
+#endif
+
   g_type_class_ref (GST_TYPE_PARSE_PAD);
 }
 
@@ -894,6 +1007,8 @@ gst_parse_bin_update_factories_list (GstParseBin * parsebin)
 static void
 gst_parse_bin_init (GstParseBin * parse_bin)
 {
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parse_bin);
+
   /* first filter out the interesting element factories */
   g_mutex_init (&parse_bin->factories_lock);
 
@@ -945,6 +1060,9 @@ gst_parse_bin_init (GstParseBin * parse_bin)
   g_mutex_init (&parse_bin->cleanup_lock);
   parse_bin->cleanup_thread = NULL;
 
+  if (G_LIKELY (klass->priv_parse_bin_init))
+    klass->priv_parse_bin_init (parse_bin);
+
   GST_OBJECT_FLAG_SET (parse_bin, GST_BIN_FLAG_STREAMS_AWARE);
 }
 
@@ -952,8 +1070,10 @@ static void
 gst_parse_bin_dispose (GObject * object)
 {
   GstParseBin *parse_bin;
+  GstParseBinClass *klass;
 
   parse_bin = GST_PARSE_BIN (object);
+  klass = GST_PARSE_BIN_GET_CLASS (parse_bin);
 
   if (parse_bin->factories)
     gst_plugin_feature_list_free (parse_bin->factories);
@@ -969,6 +1089,9 @@ gst_parse_bin_dispose (GObject * object)
   g_list_free (parse_bin->subtitles);
   parse_bin->subtitles = NULL;
 
+  if (G_LIKELY (klass->priv_parse_bin_dispose))
+    klass->priv_parse_bin_dispose (parse_bin);
+
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
@@ -976,14 +1099,19 @@ static void
 gst_parse_bin_finalize (GObject * object)
 {
   GstParseBin *parse_bin;
+  GstParseBinClass *klass;
 
   parse_bin = GST_PARSE_BIN (object);
+  klass = GST_PARSE_BIN_GET_CLASS (parse_bin);
 
   g_mutex_clear (&parse_bin->expose_lock);
   g_mutex_clear (&parse_bin->dyn_lock);
   g_mutex_clear (&parse_bin->subtitle_lock);
   g_mutex_clear (&parse_bin->factories_lock);
   g_mutex_clear (&parse_bin->cleanup_lock);
+
+  if (G_LIKELY (klass->priv_parse_bin_finalize))
+    klass->priv_parse_bin_finalize (parse_bin);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1179,29 +1307,6 @@ gst_parse_bin_autoplug_query (GstElement * element, GstPad * pad,
   /* No query handled here */
   return FALSE;
 }
-
-/********
- * Discovery methods
- *****/
-
-static gboolean is_demuxer_element (GstElement * srcelement);
-
-static gboolean connect_pad (GstParseBin * parsebin, GstElement * src,
-    GstParsePad * parsepad, GstPad * pad, GstCaps * caps,
-    GValueArray * factories, GstParseChain * chain, gchar ** deadend_details);
-static GList *connect_element (GstParseBin * parsebin, GstParseElement * pelem,
-    GstParseChain * chain);
-static void expose_pad (GstParseBin * parsebin, GstElement * src,
-    GstParsePad * parsepad, GstPad * pad, GstCaps * caps,
-    GstParseChain * chain);
-
-static void pad_added_cb (GstElement * element, GstPad * pad,
-    GstParseChain * chain);
-static void pad_removed_cb (GstElement * element, GstPad * pad,
-    GstParseChain * chain);
-static void no_more_pads_cb (GstElement * element, GstParseChain * chain);
-
-static GstParseGroup *gst_parse_chain_get_current_group (GstParseChain * chain);
 
 static gboolean
 clear_sticky_events (GstPad * pad, GstEvent ** event, gpointer user_data)
@@ -1552,6 +1657,7 @@ unknown_type:
 
     if (src == parsebin->typefind) {
       if (!caps || gst_caps_is_empty (caps)) {
+        GST_SYS_ERROR_OBJECT (parsebin, "Could not determine type of stream");
         GST_ELEMENT_ERROR (parsebin, STREAM, TYPE_NOT_FOUND,
             (_("Could not determine type of stream")), (NULL));
       }
@@ -1745,6 +1851,7 @@ connect_pad (GstParseBin * parsebin, GstElement * src, GstParsePad * parsepad,
 {
   gboolean res = FALSE;
   GString *error_details = NULL;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsebin);
 
   g_return_val_if_fail (factories != NULL, FALSE);
   g_return_val_if_fail (factories->n_values > 0, FALSE);
@@ -2094,7 +2201,11 @@ connect_pad (GstParseBin * parsebin, GstElement * src, GstParsePad * parsepad,
         GstCaps *ocaps;
 
         ocaps = get_pad_caps (opad);
-        analyze_new_pad (parsebin, pelem->element, opad, ocaps, chain);
+        if (G_LIKELY (klass->priv_analyze_new_pad))
+          klass->priv_analyze_new_pad (parsebin, pelem->element, opad, ocaps,
+              chain);
+        else
+          analyze_new_pad (parsebin, pelem->element, opad, ocaps, chain);
         if (ocaps)
           gst_caps_unref (ocaps);
 
@@ -2219,7 +2330,11 @@ connect_pad (GstParseBin * parsebin, GstElement * src, GstParsePad * parsepad,
         GstCaps *ocaps;
 
         ocaps = get_pad_caps (opad);
-        analyze_new_pad (parsebin, pelem->element, opad, ocaps, chain);
+        if (G_LIKELY (klass->priv_analyze_new_pad))
+          klass->priv_analyze_new_pad (parsebin, pelem->element, opad, ocaps,
+              chain);
+        else
+          analyze_new_pad (parsebin, pelem->element, opad, ocaps, chain);
         if (ocaps)
           gst_caps_unref (ocaps);
 
@@ -2377,6 +2492,7 @@ type_found (GstElement * typefind, guint probability,
     GstCaps * caps, GstParseBin * parse_bin)
 {
   GstPad *pad, *sink_pad;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parse_bin);
 
   GST_DEBUG_OBJECT (parse_bin, "typefind found caps %" GST_PTR_FORMAT, caps);
 
@@ -2395,6 +2511,9 @@ type_found (GstElement * typefind, guint probability,
   if (parse_bin->have_type || parse_bin->parse_chain)
     goto exit;
 
+  if (!parse_bin->have_type && G_LIKELY (klass->priv_query_smart_properties))
+    klass->priv_query_smart_properties (parse_bin);
+
   parse_bin->have_type = TRUE;
 
   pad = gst_element_get_static_pad (typefind, "src");
@@ -2406,7 +2525,11 @@ type_found (GstElement * typefind, guint probability,
    * be held (if called from a proxied setcaps), so grab it anyway */
   GST_PAD_STREAM_LOCK (sink_pad);
   parse_bin->parse_chain = gst_parse_chain_new (parse_bin, NULL, pad, caps);
-  analyze_new_pad (parse_bin, typefind, pad, caps, parse_bin->parse_chain);
+  if (G_LIKELY (klass->priv_analyze_new_pad))
+    klass->priv_analyze_new_pad (parse_bin, typefind, pad, caps,
+        parse_bin->parse_chain);
+  else
+    analyze_new_pad (parse_bin, typefind, pad, caps, parse_bin->parse_chain);
   GST_PAD_STREAM_UNLOCK (sink_pad);
 
   gst_object_unref (sink_pad);
@@ -2448,18 +2571,64 @@ pad_event_cb (GstPad * pad, GstPadProbeInfo * info, gpointer data)
   return GST_PAD_PROBE_OK;
 }
 
+static GstPadProbeReturn
+block_flush_probe (GstPad * pad, GstPadProbeInfo * info, gpointer data)
+{
+  GstEvent *event = GST_PAD_PROBE_INFO_EVENT (info);
+  GstParseBin *parsebin = (GstParseBin *) data;
+  g_assert (event);
+  g_assert (parsebin);
+
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_FLUSH_START:
+      GST_DEBUG_OBJECT (pad, "Received (%s) event, block %p",
+          GST_EVENT_TYPE_NAME (event), g_thread_self ());
+      DSC_LOCK (parsebin);
+      parsebin->flush_probed = TRUE;
+      GST_DEBUG_OBJECT (pad, "on auto plugging : %d", parsebin->on_dsc);
+      while (parsebin->on_dsc)
+        g_cond_wait (&parsebin->dsc_cond, &parsebin->dsc_lock);
+      GST_DEBUG_OBJECT (pad, "on auto plugging : %d", parsebin->on_dsc);
+      parsebin->flush_probed = FALSE;
+      DSC_UNLOCK (parsebin);
+      return GST_PAD_PROBE_REMOVE;
+      break;
+    default:
+      GST_DEBUG_OBJECT (pad, "Received (%s) event, %p",
+          GST_EVENT_TYPE_NAME (event), g_thread_self ());
+      break;
+  }
+  return GST_PAD_PROBE_OK;
+}
+
 static void
 pad_added_cb (GstElement * element, GstPad * pad, GstParseChain * chain)
 {
   GstCaps *caps;
   GstParseBin *parsebin;
+  GstParseBinClass *klass;
 
   parsebin = chain->parsebin;
+  klass = GST_PARSE_BIN_GET_CLASS (parsebin);
 
   GST_DEBUG_OBJECT (pad, "pad added, chain:%p", chain);
+  if (parsebin->adaptive_mode && is_demuxer_element (element)) {
+    DSC_LOCK (parsebin);
+    parsebin->demuxer_sink = gst_element_get_static_pad (element, "sink");
+    GST_DEBUG_OBJECT (pad, "add block probe %p", g_thread_self ());
+    parsebin->block_flush_probe_id
+        =
+        gst_pad_add_probe (parsebin->demuxer_sink,
+        GST_PAD_PROBE_TYPE_EVENT_FLUSH, block_flush_probe, parsebin, NULL);
+    parsebin->on_dsc = TRUE;
+    DSC_UNLOCK (parsebin);
+  }
 
   caps = get_pad_caps (pad);
-  analyze_new_pad (parsebin, element, pad, caps, chain);
+  if (G_LIKELY (klass->priv_analyze_new_pad))
+    klass->priv_analyze_new_pad (parsebin, element, pad, caps, chain);
+  else
+    analyze_new_pad (parsebin, element, pad, caps, chain);
   if (caps)
     gst_caps_unref (caps);
 
@@ -2677,6 +2846,7 @@ static void
 gst_parse_chain_free_internal (GstParseChain * chain, gboolean hide)
 {
   GList *l, *set_to_null = NULL;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (chain->parsebin);
 
   CHAIN_MUTEX_LOCK (chain);
 
@@ -2804,6 +2974,7 @@ gst_parse_chain_free_internal (GstParseChain * chain, gboolean hide)
   }
 
   if (chain->endcaps) {
+    chain->last_caps = gst_caps_copy (chain->endcaps);
     gst_caps_unref (chain->endcaps);
     chain->endcaps = NULL;
   }
@@ -2816,10 +2987,25 @@ gst_parse_chain_free_internal (GstParseChain * chain, gboolean hide)
 
   while (set_to_null) {
     GstElement *element = set_to_null->data;
+
     set_to_null = g_list_delete_link (set_to_null, set_to_null);
-    gst_element_set_state (element, GST_STATE_NULL);
-    gst_object_unref (element);
+
+    if (G_LIKELY (klass->priv_check_delayed_set_to_null)) {
+      if (!klass->priv_check_delayed_set_to_null (chain, element)) {
+        gst_element_set_state (element, GST_STATE_NULL);
+        gst_object_unref (element);
+      }
+    } else {
+      gst_element_set_state (element, GST_STATE_NULL);
+      gst_object_unref (element);
+    }
   }
+
+  if (!hide && chain->last_caps)
+    gst_caps_unref (chain->last_caps);
+
+  if (G_LIKELY (klass->priv_parse_chain_free))
+    klass->priv_parse_chain_free (chain);
 
   if (!hide) {
     g_mutex_clear (&chain->lock);
@@ -2853,6 +3039,7 @@ gst_parse_chain_new (GstParseBin * parsebin, GstParseGroup * parent,
     GstPad * pad, GstCaps * start_caps)
 {
   GstParseChain *chain = g_slice_new0 (GstParseChain);
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsebin);
 
   GST_DEBUG_OBJECT (parsebin, "Creating new chain %p with parent group %p",
       chain, parent);
@@ -2863,6 +3050,9 @@ gst_parse_chain_new (GstParseBin * parsebin, GstParseGroup * parent,
   chain->pad = gst_object_ref (pad);
   if (start_caps)
     chain->start_caps = gst_caps_ref (start_caps);
+
+  if (G_LIKELY (klass->priv_parse_chain_new))
+    klass->priv_parse_chain_new (chain);
 
   return chain;
 }
@@ -3003,6 +3193,7 @@ static GstParseGroup *
 gst_parse_group_new (GstParseBin * parsebin, GstParseChain * parent)
 {
   GstParseGroup *group = g_slice_new0 (GstParseGroup);
+  GList *walk;
 
   GST_DEBUG_OBJECT (parsebin, "Creating new group %p with parent chain %p",
       group, parent);
@@ -3065,6 +3256,7 @@ static gboolean
 gst_parse_chain_is_complete (GstParseChain * chain)
 {
   gboolean complete = FALSE;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (chain->parsebin);
 
   CHAIN_MUTEX_LOCK (chain);
   if (chain->parsebin->shutdown)
@@ -3073,6 +3265,11 @@ gst_parse_chain_is_complete (GstParseChain * chain)
   if (chain->deadend) {
     complete = TRUE;
     goto out;
+  }
+
+  if (G_LIKELY (klass->priv_have_composite_stream)) {
+    if (!klass->priv_have_composite_stream (chain))
+      goto out;
   }
 
   if (chain->endpad && (chain->endpad->blocked || chain->endpad->exposed)) {
@@ -3276,6 +3473,10 @@ gst_parse_pad_handle_eos (GstParsePad * pad)
       /* If we resulted in a group switch, expose what's needed */
       if (gst_parse_chain_is_complete (parsebin->parse_chain))
         gst_parse_bin_expose (parsebin);
+      else if (parsebin->adaptive_mode) {
+        GST_DEBUG_OBJECT (parsebin, "force to expose parsepad");
+        gst_parse_bin_expose (parsebin);
+      }
     }
 
     if (drained) {
@@ -3484,11 +3685,13 @@ retry:
     if (missing_plugin) {
       if (missing_plugin_details->len > 0) {
         gchar *details = g_string_free (missing_plugin_details, FALSE);
+        GST_SYS_ERROR_OBJECT (parsebin, "no suitable plugins found");
         GST_ELEMENT_ERROR (parsebin, CORE, MISSING_PLUGIN, (NULL),
             ("no suitable plugins found:\n%s", details));
         g_free (details);
       } else {
         g_string_free (missing_plugin_details, TRUE);
+        GST_SYS_ERROR_OBJECT (parsebin, "no suitable plugins found");
         GST_ELEMENT_ERROR (parsebin, CORE, MISSING_PLUGIN, (NULL),
             ("no suitable plugins found"));
       }
@@ -3500,6 +3703,7 @@ retry:
       GST_WARNING_OBJECT (parsebin, "All streams finished without buffers. "
           "Last group: %d", last_group);
       if (last_group) {
+        GST_SYS_ERROR_OBJECT (parsebin, "all streams without buffers");
         GST_ELEMENT_ERROR (parsebin, STREAM, FAILED, (NULL),
             ("all streams without buffers"));
       } else {
@@ -3633,6 +3837,14 @@ retry:
     }
     gst_object_unref (parsepad);
   }
+
+  if (parsebin->fallback_element) {
+    GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsebin);
+    /* build fallback elements */
+    if (G_LIKELY (klass->priv_build_fallback_elements))
+      klass->priv_build_fallback_elements (parsebin, endpads);
+  }
+
   g_list_free (endpads);
 
   if (fallback_collection)
@@ -3640,6 +3852,20 @@ retry:
 
   /* Remove old groups */
   chain_remove_old_groups (parsebin->parse_chain);
+
+  if (parsebin->adaptive_mode) {
+    DSC_LOCK (parsebin);
+    if (parsebin->on_dsc) {
+      parsebin->on_dsc = FALSE;
+      if (!parsebin->flush_probed) {
+        GST_DEBUG_OBJECT (parsebin, "remove block probe");
+        gst_pad_remove_probe (parsebin->demuxer_sink,
+            parsebin->block_flush_probe_id);
+      } else
+        g_cond_signal (&parsebin->dsc_cond);
+    }
+    DSC_UNLOCK (parsebin);
+  }
 
   GST_DEBUG_OBJECT (parsebin, "Exposed everything");
   return TRUE;
@@ -3883,6 +4109,15 @@ source_pad_blocked_cb (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
 
   EXPOSE_LOCK (parsebin);
   if (parsebin->parse_chain) {
+    if (parsebin->have_compositor) {
+      GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsebin);
+      if (G_LIKELY (klass->priv_parse_bin_expose_compositor)) {
+        klass->priv_parse_bin_expose_compositor (parsebin);
+        EXPOSE_UNLOCK (parsebin);
+        return ret;
+      }
+    }
+
     if (!gst_parse_bin_expose (parsebin))
       GST_WARNING_OBJECT (parsebin, "Couldn't expose group");
   }
@@ -3915,7 +4150,8 @@ guess_stream_type_from_caps (GstCaps * caps)
   if (g_str_has_prefix (name, "audio/"))
     return GST_STREAM_TYPE_AUDIO;
   if (g_str_has_prefix (name, "text/") ||
-      g_str_has_prefix (name, "subpicture/"))
+      g_str_has_prefix (name, "subpicture/") ||
+      g_str_has_prefix (name, "application/ttml+xml"))
     return GST_STREAM_TYPE_TEXT;
 
   return GST_STREAM_TYPE_UNKNOWN;
@@ -3958,6 +4194,7 @@ gst_parse_pad_stream_start_event (GstParsePad * parsepad, GstEvent * event)
   GstStream *stream = NULL;
   const gchar *stream_id = NULL;
   gboolean repeat_event = FALSE;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsepad->parsebin);
 
   gst_event_parse_stream_start (event, &stream_id);
 
@@ -3992,12 +4229,18 @@ gst_parse_pad_stream_start_event (GstParsePad * parsepad, GstEvent * event)
     if (repeat_event) {
       stream = gst_object_ref (parsepad->active_stream);
     } else {
+      GstStreamFlags stream_flags = GST_STREAM_FLAG_NONE;
+      gst_event_parse_stream_flags (event, &stream_flags);
       stream =
           gst_stream_new (stream_id, NULL, GST_STREAM_TYPE_UNKNOWN,
-          GST_STREAM_FLAG_NONE);
+          stream_flags);
       gst_object_replace ((GstObject **) & parsepad->active_stream,
           (GstObject *) stream);
     }
+
+    if (G_LIKELY (klass->priv_update_compsite_stream))
+      klass->priv_update_compsite_stream (parsepad, stream_id);
+
     if (caps) {
       gst_parse_pad_update_caps (parsepad, caps);
       gst_caps_unref (caps);
@@ -4030,8 +4273,19 @@ gst_parse_pad_event (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
   GstObject *parent = gst_pad_get_parent (pad);
   GstParsePad *parsepad = GST_PARSE_PAD (parent);
   gboolean forwardit = TRUE;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsepad->parsebin);
 
   GST_LOG_OBJECT (pad, "%s parsepad:%p", GST_EVENT_TYPE_NAME (event), parsepad);
+
+  if (G_LIKELY (klass->priv_parse_pad_event)) {
+    gboolean steal = FALSE;
+    GstPadProbeReturn res;
+    res = klass->priv_parse_pad_event (parsepad, event, &steal);
+    if (steal) {
+      gst_object_unref (parent);
+      return res;
+    }
+  }
 
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_CAPS:{
@@ -4043,6 +4297,10 @@ gst_parse_pad_event (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
     case GST_EVENT_TAG:{
       GstTagList *tags;
       gst_event_parse_tag (event, &tags);
+      if (G_LIKELY (klass->priv_parse_pad_update_tags)) {
+        klass->priv_parse_pad_update_tags (parsepad, tags);
+        break;
+      }
       gst_parse_pad_update_tags (parsepad, tags);
       break;
     }
@@ -4197,6 +4455,7 @@ gst_parse_pad_new (GstParseBin * parsebin, GstParseChain * chain)
   GstParsePad *parsepad;
   GstProxyPad *ppad;
   GstPadTemplate *pad_tmpl;
+  GstParseBinClass *klass = GST_PARSE_BIN_GET_CLASS (parsebin);
 
   GST_DEBUG_OBJECT (parsebin, "making new parsepad");
   pad_tmpl = gst_static_pad_template_get (&parse_bin_src_template);
@@ -4212,6 +4471,12 @@ gst_parse_pad_new (GstParseBin * parsebin, GstParseChain * chain)
   gst_pad_set_query_function (GST_PAD_CAST (ppad), gst_parse_pad_query);
 
   /* Add downstream event probe */
+  if (G_LIKELY (klass->priv_parse_pad_add_probe)) {
+    klass->priv_parse_pad_add_probe (parsepad, ppad);
+    gst_object_unref (ppad);
+    return parsepad;
+  }
+
   GST_LOG_OBJECT (parsepad, "Adding event probe on internal pad %"
       GST_PTR_FORMAT, ppad);
   gst_pad_add_probe (GST_PAD_CAST (ppad),

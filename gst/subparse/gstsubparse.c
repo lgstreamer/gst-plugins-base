@@ -905,6 +905,54 @@ parse_subrip_time (const gchar * ts_string, GstClockTime * t)
   return TRUE;
 }
 
+static gboolean
+parse_webvtt_time (const gchar * ts_string, GstClockTime * t)
+{
+  gchar s[128] = { '\0', };
+  gchar *end, *p;
+  guint hour, min, sec, msec, len;
+
+  while (*ts_string == ' ')
+    ++ts_string;
+
+  g_strlcpy (s, ts_string, sizeof (s));
+  if ((end = strstr (s, "-->")))
+    *end = '\0';
+  g_strchomp (s);
+
+  g_strdelimit (s, " ", '0');
+
+  /* make sure we have exactly three digits after the comma */
+  p = strchr (s, '.');
+  if (p == NULL) {
+    GST_WARNING ("failed to parse webvtt timestamp string '%s'", s);
+    return FALSE;
+  }
+
+  ++p;
+  len = strlen (p);
+  if (len > 3) {
+    p[3] = '\0';
+  } else
+    while (len < 3) {
+      g_strlcat (&p[len], "0", 2);
+      ++len;
+    }
+
+  GST_LOG ("parsing timestamp '%s'", s);
+  if (sscanf (s, "%u:%u:%u.%u", &hour, &min, &sec, &msec) != 4) {
+    if (sscanf (s, "%u:%u.%u", &min, &sec, &msec) != 3) {
+      GST_WARNING ("failed to parse webvtt timestamp string '%s'", s);
+      return FALSE;
+    } else {
+      hour = 0;
+    }
+  }
+
+  *t = ((hour * 3600) + (min * 60) + sec) * GST_SECOND + msec * GST_MSECOND;
+  return TRUE;
+}
+
 /* cue settings are part of the WebVTT specification. They are
  * declared after the time interval in the first line of the
  * cue. Example: 00:00:01,000 --> 00:00:02,000 D:vertical-lr A:start
@@ -1116,15 +1164,15 @@ parse_webvtt (ParserState * state, const gchar * line)
 
     /* looking for start_time --> end_time */
     if ((end_time = strstr (line, " --> ")) &&
-        parse_subrip_time (line, &ts_start) &&
-        parse_subrip_time (end_time + strlen (" --> "), &ts_end) &&
+        parse_webvtt_time (line, &ts_start) &&
+        parse_webvtt_time (end_time + strlen (" --> "), &ts_end) &&
         state->start_time <= ts_end) {
       state->state = 2;
       state->start_time = ts_start;
       state->duration = ts_end - ts_start;
       cue_settings = strstr (end_time + strlen (" --> "), " ");
     } else {
-      GST_DEBUG ("error parsing subrip time line '%s'", line);
+      GST_DEBUG ("error parsing webvtt time line '%s'", line);
       state->state = 0;
     }
 
@@ -1369,6 +1417,7 @@ parser_state_init (ParserState * state)
   state->max_duration = 0;      /* no limit */
   state->state = 0;
   state->segment = NULL;
+  state->need_propagation = TRUE;
 }
 
 static void
@@ -1584,7 +1633,7 @@ gst_sub_parse_format_autodetect (GstSubParse * self)
   gchar *data;
   GstSubParseFormat format;
 
-  if (strlen (self->textbuf->str) < 30) {
+  if (strlen (self->textbuf->str) < 6) {
     GST_DEBUG ("File too small to be a subtitles file");
     return NULL;
   }
@@ -1636,7 +1685,8 @@ gst_sub_parse_format_autodetect (GstSubParse * self)
       self->state.allows_tag_attributes = TRUE;
       self->parse_line = parse_webvtt;
       return gst_caps_new_simple ("text/x-raw",
-          "format", G_TYPE_STRING, "pango-markup", NULL);
+          "format", G_TYPE_STRING, "pango-markup",
+          "webvtt", G_TYPE_BOOLEAN, TRUE, NULL);
     case GST_SUB_PARSE_FORMAT_SUBVIEWER:
       self->parse_line = parse_subviewer;
       return gst_caps_new_simple ("text/x-raw",
@@ -1820,6 +1870,28 @@ handle_buffer (GstSubParse * self, GstBuffer * buf)
         GST_DEBUG_OBJECT (self, "flow: %s", gst_flow_get_name (ret));
         break;
       }
+      self->state.need_propagation = FALSE;
+    } else {
+      /* Some hls subtitle source contains only a WebVTT header
+       * without any cue data.
+       * Send a dummy buffer so that the pipeline propagation can be
+       * completed. */
+      if (self->state.need_propagation && self->state.state == 0) {
+        self->state.need_propagation = FALSE;
+        GST_WARNING ("No valid data, send dummy buffer for propagation");
+        buf = gst_buffer_new_and_alloc (1);
+        gst_buffer_set_size (buf, 0);
+
+        GST_BUFFER_TIMESTAMP (buf) = 0;
+        GST_BUFFER_DURATION (buf) = 0;
+
+        ret = gst_pad_push (self->srcpad, buf);
+
+        if (ret != GST_FLOW_OK) {
+          GST_DEBUG_OBJECT (self, "flow: %s", gst_flow_get_name (ret));
+          break;
+        }
+      }
     }
   }
 
@@ -1875,8 +1947,10 @@ gst_sub_parse_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
     {
       const GstSegment *s;
       gst_event_parse_segment (event, &s);
-      if (s->format == GST_FORMAT_TIME)
+      if (s->format == GST_FORMAT_TIME) {
         gst_event_copy_segment (event, &self->segment);
+        self->need_segment = TRUE;
+      }
       GST_DEBUG_OBJECT (self, "newsegment (%s)",
           gst_format_get_name (self->segment.format));
 

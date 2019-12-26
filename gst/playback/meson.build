@@ -18,6 +18,16 @@ playback_sources = [
   'gststreamsynchronizer.c'
 ]
 
+#ifdef HAVE_PRIV_FUNC
+playback_priv_sources = [
+  'gstdecodebin3-parse.c',
+  'gstdecodebin3-tv.c',
+  'gsturisourcebin-tv.c',
+  'gstparsebin-tv.c',
+  'gstplaybin3-tv.c',
+]
+#endif
+
 gstplayback = library('gstplayback',
   playback_sources,
   c_args : gst_plugins_base_args + ['-DCOLORSPACE="videoconvert"'],

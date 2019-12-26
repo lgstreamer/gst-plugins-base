@@ -997,6 +997,11 @@ done:
     do_async_done (decoder);
   }
 
+  /* Send request resource message */
+  if (!gst_element_post_message (GST_ELEMENT_CAST (decoder),
+          gst_message_new_application (GST_OBJECT_CAST (decoder),
+              gst_structure_new_empty ("request-resource"))))
+    GST_ERROR_OBJECT (decoder, "ERROR: Send request resource message");
   return;
 }
 

@@ -11,6 +11,7 @@ SUBDIRS = \
 	audio \
 	rtp \
 	sdp \
+	subtitle \
 	rtsp \
 	video \
 	pbutils \
@@ -25,6 +26,7 @@ DIST_SUBDIRS = \
 	audio \
 	rtp \
 	sdp \
+	subtitle \
 	rtsp \
 	video \
 	pbutils \
@@ -51,7 +53,7 @@ sdp: rtp
 gl: video allocators
 
 INDEPENDENT_SUBDIRS = \
-	tag audio fft video app
+	tag audio fft video app subtitle
 
 .PHONY: independent-subdirs $(INDEPENDENT_SUBDIRS)
 

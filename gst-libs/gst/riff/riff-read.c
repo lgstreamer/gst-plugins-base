@@ -79,6 +79,15 @@ skip_junk:
   GST_DEBUG_OBJECT (element, "fourcc=%" GST_FOURCC_FORMAT ", size=%u",
       GST_FOURCC_ARGS (*tag), size);
 
+
+  if (size > (1 << 27))         // 1 << 27 means 128MB
+  {
+    GST_WARNING_OBJECT (element,
+        "skipping because chunk size is over 128MB (size: %dMB)",
+        size / (1 << 20));
+    return GST_FLOW_ERROR;
+  }
+
   /* skip 'JUNK' chunks */
   if (*tag == GST_RIFF_TAG_JUNK || *tag == GST_RIFF_TAG_JUNQ) {
     size = GST_ROUND_UP_2 (size);

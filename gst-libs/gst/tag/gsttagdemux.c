@@ -106,6 +106,8 @@ struct _GstTagDemuxPrivate
   guint64 offset;
 
   GList *pending_events;
+
+  gboolean adaptive_mode;
 };
 
 /* Require at least 8kB of data before we attempt typefind.
@@ -167,6 +169,7 @@ static void gst_tag_demux_class_init (gpointer g_class, gpointer d);
 static void gst_tag_demux_init (GstTagDemux * obj, GstTagDemuxClass * klass);
 
 static gpointer parent_class;   /* NULL */
+static gint private_offset = 0;
 
 /* Cannot use boilerplate macros here because we want the abstract flag */
 GType
@@ -189,9 +192,18 @@ gst_tag_demux_get_type (void)
 
     object_type = g_type_register_static (GST_TYPE_ELEMENT,
         "GstTagDemux", &object_info, G_TYPE_FLAG_ABSTRACT);
+
+    private_offset =
+        g_type_add_instance_private (object_type, sizeof (GstTagDemuxPrivate));
   }
 
   return object_type;
+}
+
+static inline GstTagDemuxPrivate *
+gst_tag_demux_get_instance_private (GstTagDemux * self)
+{
+  return (G_STRUCT_MEMBER_P (self, private_offset));
 }
 
 static void
@@ -218,7 +230,8 @@ gst_tag_demux_class_init (gpointer klass, gpointer d)
 
   element_class->change_state = GST_DEBUG_FUNCPTR (gst_tag_demux_change_state);
 
-  g_type_class_add_private (klass, sizeof (GstTagDemuxPrivate));
+  if (private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &private_offset);
 
   /* subclasses must set at least one of these */
   tagdemux_class->min_start_size = 0;
@@ -259,6 +272,22 @@ gst_tag_demux_reset (GstTagDemux * tagdemux)
       (GFunc) gst_mini_object_unref, NULL);
   g_list_free (tagdemux->priv->pending_events);
   tagdemux->priv->pending_events = NULL;
+
+  tagdemux->priv->adaptive_mode = FALSE;
+}
+
+static void
+get_property_cb (GstPad * pad, GstPad * peer, GstTagDemux * demux)
+{
+  GstSmartPropertiesReturn res;
+
+  res = gst_element_get_smart_properties (GST_ELEMENT_CAST (demux),
+      "adaptive-mode", &demux->priv->adaptive_mode, NULL);
+
+  if (res != GST_SMART_PROPERTIES_OK) {
+    GST_WARNING_OBJECT (demux, "failed to get properties");
+  }
+  GST_INFO_OBJECT (demux, "adaptive-mode = %d", demux->priv->adaptive_mode);
 }
 
 static void
@@ -267,8 +296,7 @@ gst_tag_demux_init (GstTagDemux * demux, GstTagDemuxClass * gclass)
   GstElementClass *element_klass = GST_ELEMENT_CLASS (gclass);
   GstPadTemplate *tmpl;
 
-  demux->priv = g_type_instance_get_private ((GTypeInstance *) demux,
-      GST_TYPE_TAG_DEMUX);
+  demux->priv = gst_tag_demux_get_instance_private (demux);
 
   /* sink pad */
   tmpl = gst_element_class_get_pad_template (element_klass, "sink");
@@ -305,6 +333,9 @@ gst_tag_demux_init (GstTagDemux * demux, GstTagDemuxClass * gclass)
 
   demux->priv->adapter = gst_adapter_new ();
   gst_tag_demux_reset (demux);
+
+  g_signal_connect (G_OBJECT (demux->priv->sinkpad), "linked",
+      (GCallback) get_property_cb, demux);
 }
 
 static void
@@ -757,6 +788,27 @@ gst_tag_demux_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       /* we drop the caps event. We do typefind and push a new caps event. */
       ret = gst_pad_event_default (pad, parent, event);
       break;
+    case GST_EVENT_TAG:
+    {
+      if (demux->priv->adaptive_mode) {
+        GstTagList *tags = NULL;
+
+        gst_event_parse_tag (event, &tags);
+
+        if (demux->priv->event_tags == NULL) {
+          demux->priv->event_tags = gst_tag_list_copy (tags);
+        } else {
+          demux->priv->event_tags =
+              gst_tag_list_make_writable (demux->priv->event_tags);
+          gst_tag_list_insert (demux->priv->event_tags, tags,
+              GST_TAG_MERGE_REPLACE);
+        }
+        ret = TRUE;
+      } else {
+        ret = gst_pad_event_default (pad, parent, event);
+      }
+      break;
+    }
     default:
       if (demux->priv->need_newseg && GST_EVENT_IS_SERIALIZED (event)) {
         /* Cache all events if we have a pending segment, so they don't get
@@ -1767,6 +1819,19 @@ gst_tag_demux_pad_query (GstPad * pad, GstObject * parent, GstQuery * query)
       }
       break;
     }
+    case GST_QUERY_CAPS:
+    {
+
+      /* We can hijack caps query if we typefind already */
+      if (demux->priv->src_caps) {
+        gst_query_set_caps_result (query, demux->priv->src_caps);
+        res = TRUE;
+      } else {
+        res = gst_pad_query_default (pad, parent, query);
+      }
+      break;
+    }
+
     default:
       res = gst_pad_query_default (pad, parent, query);
       break;

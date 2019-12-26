@@ -65,6 +65,7 @@ static gboolean gst_gl_context_egl_choose_format (GstGLContext * context,
 
 static gboolean gst_gl_context_egl_activate (GstGLContext * context,
     gboolean activate);
+static gboolean gst_gl_context_egl_destroy_surface (GstGLContext * context);
 static void gst_gl_context_egl_swap_buffers (GstGLContext * context);
 static guintptr gst_gl_context_egl_get_gl_context (GstGLContext * context);
 static GstGLAPI gst_gl_context_egl_get_gl_api (GstGLContext * context);
@@ -85,6 +86,8 @@ gst_gl_context_egl_class_init (GstGLContextEGLClass * klass)
   context_class->get_gl_context =
       GST_DEBUG_FUNCPTR (gst_gl_context_egl_get_gl_context);
   context_class->activate = GST_DEBUG_FUNCPTR (gst_gl_context_egl_activate);
+  context_class->destroy_surface =
+      GST_DEBUG_FUNCPTR (gst_gl_context_egl_destroy_surface);
   context_class->create_context =
       GST_DEBUG_FUNCPTR (gst_gl_context_egl_create_context);
   context_class->destroy_context =
@@ -677,6 +680,31 @@ gst_gl_context_egl_activate (GstGLContext * context, gboolean activate)
 
 done:
   return result;
+}
+
+static gboolean
+gst_gl_context_egl_destroy_surface (GstGLContext * context)
+{
+  GstGLContextEGL *egl;
+  gboolean result;
+
+  egl = GST_GL_CONTEXT_EGL (context);
+
+  if (egl->egl_surface) {
+    result = eglDestroySurface (egl->egl_display, egl->egl_surface);
+    egl->egl_surface = EGL_NO_SURFACE;
+
+    /* wl_egl_window_destroy will be called at destroy_surfaces. */
+    egl->window_handle = 0;
+
+    if (!result) {
+      GST_ERROR_OBJECT (context, "Failed to destroy window surface: %s",
+          gst_egl_get_error_string (eglGetError ()));
+      return FALSE;
+    }
+  }
+
+  return TRUE;
 }
 
 static guintptr

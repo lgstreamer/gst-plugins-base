@@ -2,6 +2,14 @@ plugin_LTLIBRARIES = libgstplayback.la
 
 csp_cflags = -DCOLORSPACE=\"videoconvert\"
 
+if HAVE_PRIV_FUNC
+  PRIV_SOURCES = \
+	gsturisourcebin-tv.c \
+	gstparsebin-tv.c \
+	gstdecodebin3-tv.c \
+	gstplaybin3-tv.c
+endif
+
 libgstplayback_la_SOURCES = \
 	gstdecodebin2.c \
 	gstdecodebin3.c \
@@ -43,7 +51,8 @@ noinst_HEADERS = \
 	gstplaysinkaudioconvert.h \
 	gstplaysinkconvertbin.h \
 	gststreamsynchronizer.h \
-	gstplaybackutils.h
+	gstplaybackutils.h \
+	$(PRIV_SOURCES)
 
 BUILT_SOURCES = $(built_headers) $(built_sources)
 

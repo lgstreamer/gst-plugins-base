@@ -241,7 +241,7 @@ typedef GstCaps *(*SourceCombineGetMediaCapsFunc) (void);
 /* has the info for a combiner and provides the link to the sink */
 struct _GstSourceCombine
 {
-  const gchar *media_list[8];   /* the media types for the combiner */
+  const gchar *media_list[9];   /* the media types for the combiner */
   SourceCombineGetMediaCapsFunc get_media_caps; /* more complex caps for the combiner */
   GstPlaySinkType type;         /* the sink pad type of the combiner */
 
@@ -1386,6 +1386,7 @@ init_group (GstPlayBin * playbin, GstSourceGroup * group)
   group->combiner[PLAYBIN_STREAM_TEXT].media_list[4] = "subpicture/x-dvd";
   group->combiner[PLAYBIN_STREAM_TEXT].media_list[5] = "subpicture/";
   group->combiner[PLAYBIN_STREAM_TEXT].media_list[6] = "subtitle/";
+  group->combiner[PLAYBIN_STREAM_TEXT].media_list[7] = "application/x-teletext";
   group->combiner[PLAYBIN_STREAM_TEXT].get_media_caps =
       gst_subtitle_overlay_create_factory_caps;
   group->combiner[PLAYBIN_STREAM_TEXT].type = GST_PLAY_SINK_TYPE_TEXT;
@@ -3345,7 +3346,15 @@ pad_added_cb (GstElement * decodebin, GstPad * pad, GstSourceGroup * group)
       if (i == PLAYBIN_STREAM_AUDIO) {
         custom_combiner = playbin->audio_stream_combiner;
       } else if (i == PLAYBIN_STREAM_TEXT) {
-        custom_combiner = playbin->text_stream_combiner;
+        GstPlayFlags flags = gst_play_bin_get_flags (playbin);
+        if (flags & GST_PLAY_FLAG_NATIVE_TEXT) {
+          /* we have a funnel element for feeding all of track data in subtitle  */
+          GST_DEBUG_OBJECT (playbin,
+              "funnel element will be added as combiner for native text");
+          custom_combiner = gst_element_factory_make ("funnel", NULL);
+        } else {
+          custom_combiner = playbin->text_stream_combiner;
+        }
       } else if (i == PLAYBIN_STREAM_VIDEO) {
         custom_combiner = playbin->video_stream_combiner;
       }
@@ -4454,9 +4463,14 @@ autoplug_continue_cb (GstElement * element, GstPad * pad, GstCaps * caps,
 {
   gboolean ret = TRUE;
   GstPad *sinkpad = NULL;
+  GstPlayBin *playbin;
+  GstPlayFlags flags;
   gboolean activated_sink;
 
   GST_SOURCE_GROUP_LOCK (group);
+
+  playbin = group->playbin;
+  flags = gst_play_bin_get_flags (playbin);
 
   if (group->text_sink &&
       activate_sink (group->playbin, group->text_sink, &activated_sink)) {
@@ -4469,6 +4483,10 @@ autoplug_continue_cb (GstElement * element, GstPad * pad, GstCaps * caps,
         ret = !gst_caps_is_subset (caps, sinkcaps);
       gst_caps_unref (sinkcaps);
       gst_object_unref (sinkpad);
+    } else if (flags & GST_PLAY_FLAG_NATIVE_TEXT) {
+      GST_DEBUG_OBJECT (playbin,
+          "forced to continue auto-plugging : %" GST_PTR_FORMAT, caps);
+      ret = TRUE;
     }
     if (activated_sink)
       gst_element_set_state (group->text_sink, GST_STATE_NULL);

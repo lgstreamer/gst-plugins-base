@@ -85,13 +85,11 @@ static const FormatInfo formats[] = {
   {"application/ogg", "Ogg", AVIS_CONTAINER, "ogg"},
   {"application/kate", "Ogg", FLAG_CONTAINER | FLAG_SUB, "ogg"},
   {"application/mxf", "Material eXchange Format (MXF)", AVIS_CONTAINER, "mxf"},
-  {"application/vnd.rn-realmedia", "Realmedia", AV_CONTAINER, "rm"},
   {"application/x-id3", N_("ID3 tag"), AUDIO_TAG, ""},
   {"application/x-ape", N_("APE tag"), AUDIO_TAG, ""},
   {"application/x-apetag", N_("APE tag"), AUDIO_TAG, ""},
   {"application/x-icy", N_("ICY internet radio"), AUDIO_TAG, ""},
   {"application/x-3gp", "3GP", AV_CONTAINER, "3gp"},
-  {"application/x-pn-realaudio", "RealAudio", AUDIO_CONTAINER, "ra"},
   {"application/x-yuv4mpeg", "Y4M", VIDEO_CONTAINER, "y4m"},
   {"multipart/x-mixed-replace", "Multipart", FLAG_CONTAINER | FLAG_GENERIC, ""},
   {"video/ogg", "Ogg", AVIS_CONTAINER, "ogv"},
@@ -158,13 +156,11 @@ static const FormatInfo formats[] = {
   {"audio/x-paris", "Ensoniq PARIS", FLAG_AUDIO, ""},
   {"audio/x-qdm", "QDesign Music (QDM)", FLAG_AUDIO, ""},
   {"audio/x-qdm2", "QDesign Music (QDM) 2", FLAG_AUDIO, ""},
-  {"audio/x-ralf-mpeg4-generic", "Real Audio Lossless (RALF)", FLAG_AUDIO, ""},
   {"audio/x-rf64", "Broadcast Wave Format", AUDIO_CONTAINER, "rf64"},
   {"audio/x-sbc", "Low Complexity Subband Coding", FLAG_AUDIO, "sbc"},
   {"audio/x-sds", "Midi Sample Dump Standard", FLAG_AUDIO, ""},
   {"audio/x-shorten", "Shorten Lossless", FLAG_AUDIO, "shn"},
   {"audio/x-sid", "Sid", FLAG_AUDIO, "sid"},
-  {"audio/x-sipro", "Sipro/ACELP.NET Voice", FLAG_AUDIO, ""},
   {"audio/x-siren", "Siren", FLAG_AUDIO, ""},
   {"audio/x-spc", "SNES-SPC700 Sound File Data", FLAG_AUDIO, "spc"},
   {"audio/x-speex", "Speex", FLAG_AUDIO, ""},
@@ -190,6 +186,7 @@ static const FormatInfo formats[] = {
   {"video/x-4xm", "4X Technologies Video", FLAG_VIDEO, ""},
   {"video/x-apple-video", "Apple video", FLAG_VIDEO, ""},
   {"video/x-aasc", "Autodesk Animator", FLAG_VIDEO, ""},
+  {"video/x-av1", "AV1", FLAG_VIDEO, ""},
   {"video/x-camtasia", "TechSmith Camtasia", FLAG_VIDEO, ""},
   {"video/x-cavs", "Chinese AVS (CAVS)", FLAG_VIDEO, ""},
   {"video/x-cdxa", "RIFF/CDXA (VCD)", AV_CONTAINER, ""},
@@ -297,7 +294,6 @@ static const FormatInfo formats[] = {
   {"audio/mpeg", NULL, FLAG_AUDIO, ""},
   {"audio/x-adpcm", NULL, FLAG_AUDIO, ""},
   {"audio/x-mace", NULL, FLAG_AUDIO, ""},
-  {"audio/x-pn-realaudio", NULL, FLAG_AUDIO, ""},
   {"audio/x-raw", NULL, FLAG_AUDIO, ""},
   {"audio/x-wma", NULL, FLAG_AUDIO, ""},
   {"video/mpeg", NULL, AVS_CONTAINER | FLAG_SYSTEMSTREAM, "mpg"},
@@ -314,13 +310,6 @@ static const FormatInfo formats[] = {
   {"video/x-h265", NULL, FLAG_VIDEO, "h265"},
   {"video/x-indeo", NULL, FLAG_VIDEO, ""},
   {"video/x-msmpeg", NULL, FLAG_VIDEO, ""},
-  {"video/x-pn-realvideo", NULL, FLAG_VIDEO, ""},
-#if 0
-  /* do these exist? are they used anywhere? */
-  {"video/x-pn-multirate-realvideo", NULL, 0},
-  {"audio/x-pn-multirate-realaudio", NULL, 0},
-  {"audio/x-pn-multirate-realaudio-live", NULL, 0},
-#endif
   {"video/x-truemotion", NULL, FLAG_VIDEO, ""},
   {"video/x-raw", NULL, FLAG_VIDEO, ""},
   {"video/x-svq", NULL, FLAG_VIDEO, ""},
@@ -751,40 +740,6 @@ format_info_get_desc (const FormatInfo * info, const GstCaps * caps)
     }
     GST_WARNING ("Unexpected audio mpegversion in %" GST_PTR_FORMAT, caps);
     return g_strdup ("MPEG Audio");
-  } else if (strcmp (info->type, "audio/x-pn-realaudio") == 0) {
-    gint ver = 0;
-
-    gst_structure_get_int (s, "raversion", &ver);
-    switch (ver) {
-      case 1:
-        return g_strdup ("RealAudio 14k4bps");
-      case 2:
-        return g_strdup ("RealAudio 28k8bps");
-      case 8:
-        return g_strdup ("RealAudio G2 (Cook)");
-      default:
-        break;
-    }
-    GST_WARNING ("Unexpected raversion in %" GST_PTR_FORMAT, caps);
-    return g_strdup ("RealAudio");
-  } else if (strcmp (info->type, "video/x-pn-realvideo") == 0) {
-    gint ver = 0;
-
-    gst_structure_get_int (s, "rmversion", &ver);
-    switch (ver) {
-      case 1:
-        return g_strdup ("RealVideo 1.0");
-      case 2:
-        return g_strdup ("RealVideo 2.0");
-      case 3:
-        return g_strdup ("RealVideo 3.0");
-      case 4:
-        return g_strdup ("RealVideo 4.0");
-      default:
-        break;
-    }
-    GST_WARNING ("Unexpected rmversion in %" GST_PTR_FORMAT, caps);
-    return g_strdup ("RealVideo");
   } else if (strcmp (info->type, "video/mpeg") == 0) {
     gboolean sysstream;
     gint ver = 0;

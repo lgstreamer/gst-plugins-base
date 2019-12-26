@@ -78,6 +78,7 @@ typedef struct {
   gchar *alignment;       /* "", "start", "middle", "end" */
   gconstpointer allowed_tags; /* list of markup tags allowed in the cue text. */
   gboolean allows_tag_attributes;
+  gboolean need_propagation;
 } ParserState;
 
 typedef gchar* (*Parser) (ParserState *state, const gchar *line);

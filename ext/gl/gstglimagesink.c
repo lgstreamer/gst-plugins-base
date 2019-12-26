@@ -850,6 +850,11 @@ gst_glimage_sink_finalize (GObject * object)
   glimage_sink = GST_GLIMAGE_SINK (object);
   g_mutex_clear (&glimage_sink->drawing_lock);
 
+  if (glimage_sink->display) {
+    gst_object_unref (glimage_sink->display);
+    glimage_sink->display = NULL;
+  }
+
   GST_DEBUG ("finalized");
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }

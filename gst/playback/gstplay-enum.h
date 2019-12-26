@@ -60,6 +60,7 @@ GType gst_autoplug_select_result_get_type (void);
  * @GST_PLAY_FLAG_SOFT_COLORBALANCE: Use a software filter for colour balance
  * @GST_PLAY_FLAG_FORCE_FILTERS: force audio/video filters to be applied if
  *   set.
+ * @GST_PLAY_FLAG_NATIVE_TEXT: only allow feeding and posting subtitles data.
  *
  * Extra flags to configure the behaviour of the sinks.
  */
@@ -76,6 +77,8 @@ typedef enum {
   GST_PLAY_FLAG_DEINTERLACE   = (1 << 9),
   GST_PLAY_FLAG_SOFT_COLORBALANCE = (1 << 10),
   GST_PLAY_FLAG_FORCE_FILTERS = (1 << 11),
+  GST_PLAY_FLAG_NATIVE_TEXT = (1 << 12),
+  GST_PLAY_FLAG_FORCE_AUDIO_CONVERT = (1 << 13)
 } GstPlayFlags;
 
 #define GST_TYPE_PLAY_FLAGS (gst_play_flags_get_type())

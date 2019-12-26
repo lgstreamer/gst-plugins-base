@@ -240,7 +240,7 @@ gst_stream_synchronizer_wait (GstStreamSynchronizer * self, GstPad * pad)
 
       event =
           gst_event_new_gap (stream->segment.position, stream->gap_duration);
-      GST_DEBUG_OBJECT (pad,
+      GST_SYS_DEBUG_OBJECT (pad,
           "Send GAP event, position: %" GST_TIME_FORMAT " duration: %"
           GST_TIME_FORMAT, GST_TIME_ARGS (stream->segment.position),
           GST_TIME_ARGS (stream->gap_duration));
@@ -407,7 +407,7 @@ gst_stream_synchronizer_sink_event (GstPad * pad, GstObject * parent,
 
           self->group_start_time += position;
 
-          GST_DEBUG_OBJECT (self, "New group start time: %" GST_TIME_FORMAT,
+          GST_SYS_DEBUG_OBJECT (self, "New group start time: %" GST_TIME_FORMAT,
               GST_TIME_ARGS (self->group_start_time));
 
           for (l = self->streams; l; l = l->next) {
@@ -568,7 +568,8 @@ gst_stream_synchronizer_sink_event (GstPad * pad, GstObject * parent,
         break;
       }
 
-      GST_DEBUG_OBJECT (pad, "Have EOS for stream %d", stream->stream_number);
+      GST_SYS_DEBUG_OBJECT (pad, "Have EOS for stream %d",
+          stream->stream_number);
       stream->is_eos = TRUE;
 
       seen_data = stream->seen_data;
@@ -592,7 +593,7 @@ gst_stream_synchronizer_sink_event (GstPad * pad, GstObject * parent,
       }
 
       if (all_eos) {
-        GST_DEBUG_OBJECT (self, "All streams are EOS -- forwarding");
+        GST_SYS_DEBUG_OBJECT (self, "All streams are EOS -- forwarding");
         self->eos = TRUE;
         for (l = self->streams; l; l = l->next) {
           GstSyncStream *ostream = l->data;
@@ -635,7 +636,7 @@ gst_stream_synchronizer_sink_event (GstPad * pad, GstObject * parent,
        * send EOS. Or no any valid media data in one track, so decoder can't
        * get valid CAPS for the track. sink can't ready without received CAPS.*/
       if (!seen_data || self->eos) {
-        GST_DEBUG_OBJECT (pad, "send EOS event");
+        GST_SYS_DEBUG_OBJECT (pad, "send EOS event");
         /* drop lock when sending eos, which may block in e.g. preroll */
         GST_STREAM_SYNCHRONIZER_UNLOCK (self);
         ret = gst_pad_push_event (srcpad, gst_event_new_eos ());

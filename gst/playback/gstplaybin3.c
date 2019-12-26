@@ -228,6 +228,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_play_bin3_debug);
 #define GST_PLAY_BIN3_CLASS(klass)       (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_PLAY_BIN,GstPlayBin3Class))
 #define GST_IS_PLAY_BIN(obj)            (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_PLAY_BIN))
 #define GST_IS_PLAY_BIN_CLASS(klass)    (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_PLAY_BIN))
+#define GST_PLAY_BIN3_GET_CLASS(obj)    (G_TYPE_INSTANCE_GET_CLASS((obj),GST_TYPE_PLAY_BIN, GstPlayBin3Class))
 
 #define ULONG_TO_POINTER(number)        ((gpointer) (guintptr) (number))
 #define POINTER_TO_ULONG(number)        ((guintptr) (number))
@@ -269,8 +270,21 @@ struct _GstSourceCombine
 };
 
 #define GST_SOURCE_GROUP_GET_LOCK(group) (&((GstSourceGroup*)(group))->lock)
-#define GST_SOURCE_GROUP_LOCK(group) (g_mutex_lock (GST_SOURCE_GROUP_GET_LOCK(group)))
-#define GST_SOURCE_GROUP_UNLOCK(group) (g_mutex_unlock (GST_SOURCE_GROUP_GET_LOCK(group)))
+#define GST_SOURCE_GROUP_LOCK(group) G_STMT_START {			\
+    GST_TRACE_OBJECT (group->playbin,					\
+		    "group locking from thread %p",			\
+		    g_thread_self ());					\
+    g_mutex_lock (GST_SOURCE_GROUP_GET_LOCK(group));			\
+    GST_TRACE_OBJECT (group->playbin,					\
+		    "group locked from thread %p",			\
+		    g_thread_self ());					\
+  } G_STMT_END
+#define GST_SOURCE_GROUP_UNLOCK(group) G_STMT_START {			\
+    GST_TRACE_OBJECT (group->playbin,					\
+		    "group unlocking from thread %p",			\
+		    g_thread_self ());					\
+    g_mutex_unlock (GST_SOURCE_GROUP_GET_LOCK(group));			\
+  } G_STMT_END
 
 enum
 {
@@ -315,6 +329,9 @@ struct _SourcePad
   GstPad *pad;                  /* The controlled pad */
   GstStreamType stream_type;    /* stream type of the controlled pad */
   gulong event_probe_id;
+  gboolean push_gap;
+  gboolean mark_seg;
+  gboolean is_eos;
 };
 
 /* a structure to hold the objects for decoding a uri and the subtitle uri
@@ -386,11 +403,36 @@ struct _GstSourceGroup
 
   /* buffering message stored for after switching */
   GstMessage *pending_buffering_msg;
+
+  guint32 gap_seqnum;
+  guint timeout_id;
+
+  /* Check whether to pushing gap event or not */
+  gboolean use_fallback_preroll;
+
+  /* For adaptive streaming cases HLS and DASH */
+  gboolean adaptive_mode;
+
+  /* For digital video recoding playback */
+  gboolean dvr_playback;
 };
 
 #define GST_PLAY_BIN3_GET_LOCK(bin) (&((GstPlayBin3*)(bin))->lock)
-#define GST_PLAY_BIN3_LOCK(bin) (g_rec_mutex_lock (GST_PLAY_BIN3_GET_LOCK(bin)))
-#define GST_PLAY_BIN3_UNLOCK(bin) (g_rec_mutex_unlock (GST_PLAY_BIN3_GET_LOCK(bin)))
+#define GST_PLAY_BIN3_LOCK(bin) G_STMT_START {				\
+    GST_TRACE_OBJECT (bin,						\
+		    "playbin3 locking from thread %p",			\
+		    g_thread_self ());					\
+    g_rec_mutex_lock (GST_PLAY_BIN3_GET_LOCK(bin));			\
+    GST_TRACE_OBJECT (bin,						\
+		    "playbin3 locked from thread %p",			\
+		    g_thread_self ());					\
+  } G_STMT_END
+#define GST_PLAY_BIN3_UNLOCK(bin) G_STMT_START {			\
+    GST_TRACE_OBJECT (bin,						\
+		    "playbin3 unlocking from thread %p",		\
+		    g_thread_self ());					\
+    g_rec_mutex_unlock (GST_PLAY_BIN3_GET_LOCK(bin));			\
+  } G_STMT_END
 
 /* lock to protect dynamic callbacks, like no-more-pads */
 #define GST_PLAY_BIN3_DYN_LOCK(bin)    g_mutex_lock (&(bin)->dyn_lock)
@@ -503,6 +545,10 @@ struct _GstPlayBin3
   GSequence *velements;         /* a list of GstAVElements for video stream */
 
   guint64 ring_buffer_max_size; /* 0 means disabled */
+
+  GstElement *adaptivedemux;
+  GstElement *decodebin;
+  GstElement *mq;
 };
 
 struct _GstPlayBin3Class
@@ -515,6 +561,22 @@ struct _GstPlayBin3Class
 
   /* get the last video sample and convert it to the given caps */
   GstSample *(*convert_sample) (GstPlayBin3 * playbin, GstCaps * caps);
+
+  /* Virtual Functions for webOS platform */
+  void (*priv_play_bin3_init) (GstPlayBin3 * playbin);
+  void (*priv_play_bin3_finalize) (GstPlayBin3 * playbin);
+  void (*priv_play_bin3_handle_message) (GstBin * bin, GstMessage * msg,
+      gboolean * steal);
+    gboolean (*priv_play_bin3_send_event) (GstPlayBin3 * playbin,
+      GstEvent * event, gboolean * steal);
+  void (*priv_play_bin3_deep_element_added) (GstBin * bin, GstBin * sub_bin,
+      GstElement * child);
+  void (*priv_play_bin3_deep_element_removed) (GstBin * bin, GstBin * sub_bin,
+      GstElement * child);
+  void (*priv_init_group) (GstPlayBin3 * playbin, GstSourceGroup * group);
+  void (*priv_free_group) (GstPlayBin3 * playbin, GstSourceGroup * group);
+  void (*priv_query_smart_properties) (GstPlayBin3 * playbin,
+      GstSourceGroup * group);
 };
 
 /* props */
@@ -522,7 +584,7 @@ struct _GstPlayBin3Class
 #define DEFAULT_SUBURI            NULL
 #define DEFAULT_FLAGS             GST_PLAY_FLAG_AUDIO | GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_TEXT | \
                                   GST_PLAY_FLAG_SOFT_VOLUME | GST_PLAY_FLAG_DEINTERLACE | \
-                                  GST_PLAY_FLAG_SOFT_COLORBALANCE | GST_PLAY_FLAG_BUFFERING
+                                  GST_PLAY_FLAG_SOFT_COLORBALANCE
 #define DEFAULT_CURRENT_VIDEO     -1
 #define DEFAULT_CURRENT_AUDIO     -1
 #define DEFAULT_CURRENT_TEXT      -1
@@ -602,6 +664,8 @@ static GstStateChangeReturn gst_play_bin3_change_state (GstElement * element,
 static void gst_play_bin3_handle_message (GstBin * bin, GstMessage * message);
 static void gst_play_bin3_deep_element_added (GstBin * playbin,
     GstBin * sub_bin, GstElement * child);
+static void gst_play_bin3_deep_element_removed (GstBin * playbin,
+    GstBin * sub_bin, GstElement * child);
 static gboolean gst_play_bin3_send_event (GstElement * element,
     GstEvent * event);
 
@@ -621,6 +685,8 @@ static gint select_stream_cb (GstElement * decodebin,
     GstSourceGroup * group);
 
 static void do_stream_selection (GstPlayBin3 * playbin, GstSourceGroup * group);
+
+static GstSourceGroup *get_group (GstPlayBin3 * playbin);
 
 static GstElementClass *parent_class;
 
@@ -688,6 +754,10 @@ gst_play_bin3_get_type (void)
 
   return gst_play_bin3_type;
 }
+
+#ifdef HAVE_PRIV_FUNC
+#include "gstplaybin3-tv.c"
+#endif
 
 static void
 gst_play_bin3_class_init (GstPlayBin3Class * klass)
@@ -1052,6 +1122,21 @@ gst_play_bin3_class_init (GstPlayBin3Class * klass)
       GST_DEBUG_FUNCPTR (gst_play_bin3_handle_message);
   gstbin_klass->deep_element_added =
       GST_DEBUG_FUNCPTR (gst_play_bin3_deep_element_added);
+  gstbin_klass->deep_element_removed =
+      GST_DEBUG_FUNCPTR (gst_play_bin3_deep_element_removed);
+
+#ifdef HAVE_PRIV_FUNC
+  klass->priv_play_bin3_init = priv_play_bin3_init;
+  klass->priv_play_bin3_finalize = priv_play_bin3_finalize;
+  klass->priv_play_bin3_handle_message = priv_play_bin3_handle_message;
+  klass->priv_play_bin3_send_event = priv_play_bin3_send_event;
+  klass->priv_play_bin3_deep_element_added = priv_play_bin3_deep_element_added;
+  klass->priv_play_bin3_deep_element_removed =
+      priv_play_bin3_deep_element_removed;
+  klass->priv_init_group = priv_init_group;
+  klass->priv_free_group = priv_free_group;
+  klass->priv_query_smart_properties = priv_query_smart_properties;
+#endif
 }
 
 static void
@@ -1190,17 +1275,23 @@ update_combiner_info (GstPlayBin3 * playbin, GstStreamCollection * collection)
 static void
 init_group (GstPlayBin3 * playbin, GstSourceGroup * group)
 {
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (playbin);
+
   g_mutex_init (&group->lock);
 
   group->stream_changed_pending = FALSE;
   group->group_id = GST_GROUP_ID_INVALID;
-
   group->playbin = playbin;
+
+  if (G_LIKELY (klass->priv_init_group))
+    klass->priv_init_group (playbin, group);
 }
 
 static void
 free_group (GstPlayBin3 * playbin, GstSourceGroup * group)
 {
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (playbin);
+
   g_free (group->uri);
   g_free (group->suburi);
 
@@ -1216,6 +1307,9 @@ free_group (GstPlayBin3 * playbin, GstSourceGroup * group)
   gst_object_replace ((GstObject **) & group->audio_sink, NULL);
   gst_object_replace ((GstObject **) & group->video_sink, NULL);
   gst_object_replace ((GstObject **) & group->text_sink, NULL);
+
+  if (G_LIKELY (klass->priv_free_group))
+    klass->priv_free_group (playbin, group);
 }
 
 static void
@@ -1317,6 +1411,8 @@ gst_play_bin3_update_elements_list (GstPlayBin3 * playbin)
 static void
 gst_play_bin3_init (GstPlayBin3 * playbin)
 {
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (playbin);
+
   g_rec_mutex_init (&playbin->lock);
   g_mutex_init (&playbin->dyn_lock);
 
@@ -1362,6 +1458,9 @@ gst_play_bin3_init (GstPlayBin3 * playbin)
 
   playbin->multiview_mode = GST_VIDEO_MULTIVIEW_FRAME_PACKING_NONE;
   playbin->multiview_flags = GST_VIDEO_MULTIVIEW_FLAGS_NONE;
+
+  if (G_LIKELY (klass->priv_play_bin3_init))
+    klass->priv_play_bin3_init (playbin);
 }
 
 static void
@@ -1369,8 +1468,10 @@ gst_play_bin3_finalize (GObject * object)
 {
   GstPlayBin3 *playbin;
   gint i;
+  GstPlayBin3Class *klass;
 
   playbin = GST_PLAY_BIN3 (object);
+  klass = GST_PLAY_BIN3_GET_CLASS (playbin);
 
   free_group (playbin, &playbin->groups[0]);
   free_group (playbin, &playbin->groups[1]);
@@ -1425,6 +1526,9 @@ gst_play_bin3_finalize (GObject * object)
   g_rec_mutex_clear (&playbin->lock);
   g_mutex_clear (&playbin->dyn_lock);
   g_mutex_clear (&playbin->elements_lock);
+
+  if (G_LIKELY (klass->priv_play_bin3_finalize))
+    klass->priv_play_bin3_finalize (playbin);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1943,10 +2047,8 @@ gst_play_bin3_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_flags (value, gst_play_bin3_get_flags (playbin));
       break;
     case PROP_SUBTITLE_ENCODING:
-      GST_PLAY_BIN3_LOCK (playbin);
       g_value_take_string (value,
           gst_play_sink_get_subtitle_encoding (playbin->playsink));
-      GST_PLAY_BIN3_UNLOCK (playbin);
       break;
     case PROP_VIDEO_FILTER:
       g_value_take_object (value,
@@ -2254,6 +2356,14 @@ static gboolean
 gst_play_bin3_send_event (GstElement * element, GstEvent * event)
 {
   GstPlayBin3 *playbin = GST_PLAY_BIN3 (element);
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (playbin);
+
+  if (G_LIKELY (klass->priv_play_bin3_send_event)) {
+    gboolean steal = FALSE;
+    gboolean res = klass->priv_play_bin3_send_event (playbin, event, &steal);
+    if (steal)
+      return res;
+  }
 
   if (GST_EVENT_TYPE (event) == GST_EVENT_SELECT_STREAMS) {
     gboolean res;
@@ -2427,6 +2537,14 @@ static void
 gst_play_bin3_handle_message (GstBin * bin, GstMessage * msg)
 {
   GstPlayBin3 *playbin = GST_PLAY_BIN3 (bin);
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (playbin);
+
+  if (G_LIKELY (klass->priv_play_bin3_handle_message)) {
+    gboolean steal = FALSE;
+    klass->priv_play_bin3_handle_message (bin, msg, &steal);
+    if (steal)
+      goto beach;
+  }
 
   if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_STREAM_START) {
     GstSourceGroup *group = NULL, *other_group = NULL;
@@ -2538,13 +2656,30 @@ static void
 gst_play_bin3_deep_element_added (GstBin * playbin, GstBin * sub_bin,
     GstElement * child)
 {
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (GST_PLAY_BIN3 (playbin));
+
   GST_LOG_OBJECT (playbin, "element %" GST_PTR_FORMAT " was added to "
       "%" GST_PTR_FORMAT, child, sub_bin);
+
+  if (G_LIKELY (klass->priv_play_bin3_deep_element_added))
+    klass->priv_play_bin3_deep_element_added (playbin, sub_bin, child);
 
   g_signal_emit (playbin, gst_play_bin3_signals[SIGNAL_ELEMENT_SETUP], 0,
       child);
 
   GST_BIN_CLASS (parent_class)->deep_element_added (playbin, sub_bin, child);
+}
+
+static void
+gst_play_bin3_deep_element_removed (GstBin * playbin, GstBin * sub_bin,
+    GstElement * child)
+{
+  GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (GST_PLAY_BIN3 (playbin));
+
+  if (G_LIKELY (klass->priv_play_bin3_deep_element_removed))
+    klass->priv_play_bin3_deep_element_removed (playbin, sub_bin, child);
+
+  GST_BIN_CLASS (parent_class)->deep_element_removed (playbin, sub_bin, child);
 }
 
 /* Returns current stream number, or -1 if none has been selected yet */
@@ -2731,6 +2866,7 @@ _decodebin_event_probe (GstPad * pad, GstPadProbeInfo * info, gpointer udata)
   GstSourceGroup *group = (GstSourceGroup *) udata;
   GstPlayBin3 *playbin = group->playbin;
   GstEvent *event = GST_PAD_PROBE_INFO_DATA (info);
+  SourcePad *sourcepad = find_source_pad (group, pad);
 
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_CAPS:{
@@ -2766,6 +2902,30 @@ _decodebin_event_probe (GstPad * pad, GstPadProbeInfo * info, gpointer udata)
           group->group_id = group_id;
         }
       }
+      if (sourcepad) {
+        GST_DEBUG_OBJECT (pad, "remove eos flag");
+        sourcepad->is_eos = FALSE;
+      }
+      break;
+    }
+    case GST_EVENT_EOS:
+    {
+      GST_DEBUG_OBJECT (pad, "Got event %p %s", event,
+          GST_EVENT_TYPE_NAME (event));
+      if (sourcepad) {
+        GST_DEBUG_OBJECT (pad, "add eos flag");
+        sourcepad->is_eos = TRUE;
+      }
+      break;
+    }
+    case GST_EVENT_FLUSH_STOP:
+    {
+      GST_DEBUG_OBJECT (pad, "Got event %p %s", event,
+          GST_EVENT_TYPE_NAME (event));
+      if (sourcepad) {
+        GST_DEBUG_OBJECT (pad, "remove eos flag");
+        sourcepad->is_eos = FALSE;
+      }
       break;
     }
     default:
@@ -2786,6 +2946,9 @@ control_source_pad (GstSourceGroup * group, GstPad * pad,
       gst_pad_add_probe (pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
       _decodebin_event_probe, group, NULL);
   sourcepad->stream_type = stream_type;
+  sourcepad->push_gap = FALSE;
+  sourcepad->mark_seg = FALSE;
+  sourcepad->is_eos = FALSE;
   group->source_pads = g_list_append (group->source_pads, sourcepad);
 }
 
@@ -3657,6 +3820,8 @@ static GstBusSyncReply
 activate_sink_bus_handler (GstBus * bus, GstMessage * msg,
     GstPlayBin3 * playbin)
 {
+  GST_FIXME_OBJECT (playbin, "Got message: %" GST_PTR_FORMAT, msg);
+
   if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_ERROR) {
     /* Only proxy errors from a fixed sink. If that fails we can just error out
      * early as stuff will fail later anyway */
@@ -4807,6 +4972,14 @@ gst_play_bin3_activation_thread (GstPlayBin3 * playbin)
   GST_LOG_OBJECT (playbin, "Pausing task");
   if (playbin->activation_task)
     gst_task_pause (playbin->activation_task);
+
+  if (playbin->curr_group->active && playbin->decodebin) {
+    GstPlayBin3Class *klass = GST_PLAY_BIN3_GET_CLASS (playbin);
+
+    if (G_LIKELY (klass->priv_query_smart_properties))
+      klass->priv_query_smart_properties (playbin, playbin->curr_group);
+  }
+
   GST_PLAY_BIN3_UNLOCK (playbin);
 
   GST_DEBUG_OBJECT (playbin, "done");

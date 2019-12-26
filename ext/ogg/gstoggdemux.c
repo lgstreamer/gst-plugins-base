@@ -5119,6 +5119,7 @@ gst_ogg_demux_sink_activate_mode (GstPad * sinkpad, GstObject * parent,
         g_thread_join (ogg->seek_event_thread);
         ogg->seek_event_thread = NULL;
       }
+      ogg->push_disable_seeking = TRUE;
       res = TRUE;
       break;
     case GST_PAD_MODE_PULL:

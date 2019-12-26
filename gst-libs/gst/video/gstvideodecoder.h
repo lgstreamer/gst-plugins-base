@@ -345,6 +345,12 @@ GST_VIDEO_API
 GType    gst_video_decoder_get_type (void);
 
 /* Context parameters */
+GST_VIDEO_API
+void     gst_video_decoder_set_reverse_decode_keyframe (GstVideoDecoder * decoder,
+             gboolean enabled);
+
+GST_VIDEO_API
+gboolean gst_video_decoder_get_reverse_decode_keyframe (GstVideoDecoder * decoder);
 
 GST_VIDEO_API
 void     gst_video_decoder_set_packetized (GstVideoDecoder * decoder,
@@ -471,6 +477,11 @@ GstCaps *        gst_video_decoder_proxy_getcaps (GstVideoDecoder * decoder,
 GST_VIDEO_API
 void             gst_video_decoder_set_use_default_pad_acceptcaps (GstVideoDecoder * decoder,
                                                                    gboolean use);
+
+/* Enable/Disable change-buffer-meta property */
+void             gst_video_decoder_set_change_buffer_meta (GstVideoDecoder *decoder,
+                                                          gboolean change);
+gboolean         gst_video_decoder_get_change_buffer_meta (GstVideoDecoder *decoder);
 
 #ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstVideoDecoder, gst_object_unref)

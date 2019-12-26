@@ -126,6 +126,7 @@ struct _GstGLContextClass {
   GstGLPlatform (*get_gl_platform)    (GstGLContext *context);
   gpointer      (*get_proc_address)   (GstGLAPI gl_api, const gchar *name);
   gboolean      (*activate)           (GstGLContext *context, gboolean activate);
+  gboolean      (*destroy_surface)    (GstGLContext *context);
   gboolean      (*choose_format)      (GstGLContext *context, GError **error);
   gboolean      (*create_context)     (GstGLContext *context, GstGLAPI gl_api,
                                        GstGLContext *other_context, GError ** error);
@@ -150,6 +151,8 @@ GstGLContext * gst_gl_context_new_wrapped (GstGLDisplay *display,
 
 GST_GL_API
 gboolean      gst_gl_context_activate         (GstGLContext *context, gboolean activate);
+GST_GL_API
+gboolean      gst_gl_context_destroy_surface  (GstGLContext *context);
 GST_GL_API
 GThread *     gst_gl_context_get_thread       (GstGLContext *context);
 GST_GL_API

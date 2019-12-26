@@ -1058,7 +1058,8 @@ gst_alsasink_write (GstAudioSink * asink, gpointer data, guint length)
       continue;
     }
 
-    ptr += snd_pcm_frames_to_bytes (alsa->handle, err);
+    /* Pow fixed data ptr count error */
+    ptr += snd_pcm_frames_to_bytes (alsa->handle, err) / 2;
     cptr -= err;
   }
   GST_ALSA_SINK_UNLOCK (asink);

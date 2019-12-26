@@ -288,10 +288,6 @@
 GST_DEBUG_CATEGORY (videodecoder_debug);
 #define GST_CAT_DEFAULT videodecoder_debug
 
-#define GST_VIDEO_DECODER_GET_PRIVATE(obj)  \
-    (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_VIDEO_DECODER, \
-        GstVideoDecoderPrivate))
-
 struct _GstVideoDecoderPrivate
 {
   /* FIXME introduce a context ? */
@@ -312,6 +308,9 @@ struct _GstVideoDecoderPrivate
 
   /* Whether input is considered packetized or not */
   gboolean packetized;
+
+  /* Whether decode only keyframe in the case of reverse playback */
+  gboolean reverse_decode_keyframe;
 
   /* Error handling */
   gint max_errors;
@@ -407,14 +406,32 @@ struct _GstVideoDecoderPrivate
    * from flush to first output */
   GstClockTime last_reset_time;
 #endif
+  /* change buffer meta like pts, duration */
+  gboolean change_buffer_meta;
+};
+
+#define DEFAULT_CHANGE_BUFFER_META TRUE
+
+enum
+{
+  PROP_0,
+  PROP_CHANGE_BUFFER_META,
+  PROP_LAST
 };
 
 static GstElementClass *parent_class = NULL;
+static gint private_offset = 0;
+
 static void gst_video_decoder_class_init (GstVideoDecoderClass * klass);
 static void gst_video_decoder_init (GstVideoDecoder * dec,
     GstVideoDecoderClass * klass);
 
 static void gst_video_decoder_finalize (GObject * object);
+
+static void gst_video_decoder_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec);
+static void gst_video_decoder_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec);
 
 static gboolean gst_video_decoder_setcaps (GstVideoDecoder * dec,
     GstCaps * caps);
@@ -493,9 +510,19 @@ gst_video_decoder_get_type (void)
 
     _type = g_type_register_static (GST_TYPE_ELEMENT,
         "GstVideoDecoder", &info, G_TYPE_FLAG_ABSTRACT);
+
+    private_offset =
+        g_type_add_instance_private (_type, sizeof (GstVideoDecoderPrivate));
+
     g_once_init_leave (&type, _type);
   }
   return type;
+}
+
+static inline GstVideoDecoderPrivate *
+gst_video_decoder_get_instance_private (GstVideoDecoder * self)
+{
+  return (G_STRUCT_MEMBER_P (self, private_offset));
 }
 
 static void
@@ -511,9 +538,20 @@ gst_video_decoder_class_init (GstVideoDecoderClass * klass)
       "Base Video Decoder");
 
   parent_class = g_type_class_peek_parent (klass);
-  g_type_class_add_private (klass, sizeof (GstVideoDecoderPrivate));
+
+  if (private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &private_offset);
 
   gobject_class->finalize = gst_video_decoder_finalize;
+  gobject_class->set_property = gst_video_decoder_set_property;
+  gobject_class->get_property = gst_video_decoder_get_property;
+
+  /* GstVideoDecoder:change-buffer-meta */
+  g_object_class_install_property (gobject_class, PROP_CHANGE_BUFFER_META,
+      g_param_spec_boolean ("change-buffer-meta", "Change buffer meta",
+          "If disable, Do not change the meta of buffer such as pts, duration",
+          DEFAULT_CHANGE_BUFFER_META,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gstelement_class->change_state =
       GST_DEBUG_FUNCPTR (gst_video_decoder_change_state);
@@ -536,7 +574,7 @@ gst_video_decoder_init (GstVideoDecoder * decoder, GstVideoDecoderClass * klass)
 
   GST_DEBUG_OBJECT (decoder, "gst_video_decoder_init");
 
-  decoder->priv = GST_VIDEO_DECODER_GET_PRIVATE (decoder);
+  decoder->priv = gst_video_decoder_get_instance_private (decoder);
 
   pad_template =
       gst_element_class_get_pad_template (GST_ELEMENT_CLASS (klass), "sink");
@@ -572,9 +610,11 @@ gst_video_decoder_init (GstVideoDecoder * decoder, GstVideoDecoderClass * klass)
   decoder->priv->output_adapter = gst_adapter_new ();
   decoder->priv->packetized = TRUE;
   decoder->priv->needs_format = FALSE;
+  decoder->priv->reverse_decode_keyframe = FALSE;
 
   decoder->priv->min_latency = 0;
   decoder->priv->max_latency = 0;
+  decoder->priv->change_buffer_meta = DEFAULT_CHANGE_BUFFER_META;
 
   gst_video_decoder_reset (decoder, TRUE, TRUE);
 }
@@ -669,6 +709,66 @@ _new_output_state (GstVideoFormat fmt, guint width, guint height,
       state->info.fps_n, state->info.fps_d);
 
   return state;
+}
+
+void
+gst_video_decoder_set_change_buffer_meta (GstVideoDecoder * decoder,
+    gboolean change)
+{
+  g_return_if_fail (GST_IS_VIDEO_DECODER (decoder));
+
+  GST_OBJECT_LOCK (decoder);
+  GST_DEBUG_OBJECT (decoder, "set change-buffer-meta to %d", change);
+  decoder->priv->change_buffer_meta = change;
+  GST_OBJECT_UNLOCK (decoder);
+}
+
+gboolean
+gst_video_decoder_get_change_buffer_meta (GstVideoDecoder * decoder)
+{
+  gboolean res;
+  g_return_val_if_fail (GST_IS_VIDEO_DECODER (decoder),
+      DEFAULT_CHANGE_BUFFER_META);
+
+  GST_OBJECT_LOCK (decoder);
+  res = decoder->priv->change_buffer_meta;
+  GST_OBJECT_UNLOCK (decoder);
+
+  return res;
+}
+
+static void
+gst_video_decoder_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstVideoDecoder *decoder = GST_VIDEO_DECODER (object);;
+
+  switch (prop_id) {
+    case PROP_CHANGE_BUFFER_META:
+      gst_video_decoder_set_change_buffer_meta (decoder,
+          g_value_get_boolean (value));
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_video_decoder_get_property (GObject * object, guint prop_id, GValue * value,
+    GParamSpec * pspec)
+{
+  GstVideoDecoder *decoder = GST_VIDEO_DECODER (object);;
+
+  switch (prop_id) {
+    case PROP_CHANGE_BUFFER_META:
+      g_value_set_boolean (value,
+          gst_video_decoder_get_change_buffer_meta (decoder));
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
 }
 
 static gboolean
@@ -916,7 +1016,7 @@ gst_video_decoder_drain_out (GstVideoDecoder * dec, gboolean at_eos)
   GstVideoDecoderPrivate *priv = dec->priv;
   GstFlowReturn ret = GST_FLOW_OK;
 
-  if (dec->input_segment.rate > 0.0) {
+  if (dec->input_segment.rate > 0.0 || priv->reverse_decode_keyframe) {
     /* Forward mode, if unpacketized, give the child class
      * a final chance to flush out packets */
     if (!priv->packetized) {
@@ -1156,9 +1256,11 @@ gst_video_decoder_sink_event_default (GstVideoDecoder * decoder,
 
       /* Error out even if EOS was ok when we had input, but no output */
       if (ret && priv->had_input_data && !priv->had_output_data) {
-        GST_ELEMENT_ERROR (decoder, STREAM, DECODE,
-            ("No valid frames decoded before end of stream"),
-            ("no valid frames found"));
+        /*  GST_ELEMENT_ERROR (decoder, STREAM, DECODE,
+           ("No valid frames decoded before end of stream"),
+           ("no valid frames found")); */
+        GST_SYS_WARNING_OBJECT (decoder,
+            "No valid frames decoded before end of stream");
       }
 
       /* Forward EOS immediately. This is required because no
@@ -1187,6 +1289,8 @@ gst_video_decoder_sink_event_default (GstVideoDecoder * decoder,
       if (!decoder->priv->output_state) {
         if (!gst_video_decoder_negotiate_default_caps (decoder)) {
           GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+          GST_SYS_ERROR_OBJECT (decoder,
+              "Decoder output not negotiated before GAP event.");
           GST_ELEMENT_ERROR (decoder, STREAM, FORMAT, (NULL),
               ("Decoder output not negotiated before GAP event."));
           forward_immediate = TRUE;
@@ -2135,7 +2239,7 @@ gst_video_decoder_chain_forward (GstVideoDecoder * decoder,
 
     priv->current_frame->input_buffer = buf;
 
-    if (decoder->input_segment.rate < 0.0) {
+    if (decoder->input_segment.rate < 0.0 && !priv->reverse_decode_keyframe) {
       priv->parse_gather =
           g_list_prepend (priv->parse_gather, priv->current_frame);
     } else {
@@ -2339,6 +2443,9 @@ gst_video_decoder_flush_parse (GstVideoDecoder * dec, gboolean at_eos)
       while (walk) {
         GstBuffer *buf = GST_BUFFER_CAST (walk->data);
 
+        priv->output_queued =
+            g_list_delete_link (priv->output_queued, priv->output_queued);
+
         if (G_LIKELY (res == GST_FLOW_OK)) {
           /* avoid stray DISCONT from forward processing,
            * which have no meaning in reverse pushing */
@@ -2363,8 +2470,6 @@ gst_video_decoder_flush_parse (GstVideoDecoder * dec, gboolean at_eos)
           gst_buffer_unref (buf);
         }
 
-        priv->output_queued =
-            g_list_delete_link (priv->output_queued, priv->output_queued);
         walk = priv->output_queued;
       }
 
@@ -2453,6 +2558,8 @@ gst_video_decoder_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   decoder->priv->had_input_data = TRUE;
 
   if (decoder->input_segment.rate > 0.0)
+    ret = gst_video_decoder_chain_forward (decoder, buf, FALSE);
+  else if (decoder->priv->reverse_decode_keyframe)
     ret = gst_video_decoder_chain_forward (decoder, buf, FALSE);
   else
     ret = gst_video_decoder_chain_reverse (decoder, buf);
@@ -2652,6 +2759,11 @@ gst_video_decoder_prepare_finish_frame (GstVideoDecoder *
    * frame in vp8. In this case we should not update the timestamps. */
   if (GST_VIDEO_CODEC_FRAME_IS_DECODE_ONLY (frame))
     return;
+
+  if (decoder->output_segment.rate < 0.0
+      && decoder->priv->reverse_decode_keyframe) {
+    return;
+  }
 
   /* If the frame is meant to be output but we don't have an output_buffer
    * we have a problem :) */
@@ -3053,8 +3165,7 @@ gst_video_decoder_finish_frame (GstVideoDecoder * decoder,
   gst_video_decoder_release_frame (decoder, frame);
   frame = NULL;
 
-  if (decoder->output_segment.rate < 0.0
-      && !(decoder->output_segment.flags & GST_SEEK_FLAG_TRICKMODE_KEY_UNITS)) {
+  if (decoder->output_segment.rate < 0.0 && !priv->reverse_decode_keyframe) {
     GST_LOG_OBJECT (decoder, "queued frame");
     priv->output_queued = g_list_prepend (priv->output_queued, output_buffer);
   } else {
@@ -3106,10 +3217,12 @@ gst_video_decoder_clip_and_push_buf (GstVideoDecoder * decoder, GstBuffer * buf)
 
   segment = &decoder->output_segment;
   if (gst_segment_clip (segment, GST_FORMAT_TIME, start, stop, &cstart, &cstop)) {
-    GST_BUFFER_PTS (buf) = cstart;
+    if (decoder->priv->change_buffer_meta) {
+      GST_BUFFER_PTS (buf) = cstart;
 
-    if (stop != GST_CLOCK_TIME_NONE && GST_CLOCK_TIME_IS_VALID (duration))
-      GST_BUFFER_DURATION (buf) = cstop - cstart;
+      if (stop != GST_CLOCK_TIME_NONE && GST_CLOCK_TIME_IS_VALID (duration))
+        GST_BUFFER_DURATION (buf) = cstop - cstart;
+    }
 
     GST_LOG_OBJECT (decoder,
         "accepting buffer inside segment: %" GST_TIME_FORMAT " %"
@@ -3203,7 +3316,11 @@ gst_video_decoder_clip_and_push_buf (GstVideoDecoder * decoder, GstBuffer * buf)
   }
 #endif
 
+  /* release STREAM_LOCK not to block upstream 
+   * while pushing buffer downstream */
+  GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
   ret = gst_pad_push (decoder->srcpad, buf);
+  GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
 done:
   return ret;
@@ -3340,7 +3457,8 @@ gst_video_decoder_have_frame (GstVideoDecoder * decoder)
   }
 
   /* In reverse playback, just capture and queue frames for later processing */
-  if (decoder->input_segment.rate < 0.0) {
+  if ((decoder->output_segment.rate < 0.0 || decoder->input_segment.rate < 0.0)
+      && !priv->reverse_decode_keyframe) {
     priv->parse_gather =
         g_list_prepend (priv->parse_gather, priv->current_frame);
   } else {
@@ -4431,4 +4549,39 @@ gst_video_decoder_set_use_default_pad_acceptcaps (GstVideoDecoder * decoder,
     gboolean use)
 {
   decoder->priv->use_default_pad_acceptcaps = use;
+}
+
+/**
+ * gst_video_decoder_set_reverse_decode_keyframe:
+ * @decoder: a #GstVideoDecoder
+ * @enabled: whether to enable decode keyframe only in reverse playback
+ *
+ * Allows baseclass to decode only keyframe in reverse playback. Video
+ * decoder does not queue the reverse frames. It only decode the keyframe
+ * immediately as the same as the forward playback.
+ */
+void
+gst_video_decoder_set_reverse_decode_keyframe (GstVideoDecoder * decoder,
+    gboolean enabled)
+{
+  g_return_if_fail (GST_IS_VIDEO_DECODER (decoder));
+
+  decoder->priv->reverse_decode_keyframe = enabled;
+}
+
+/**
+ * gst_video_decoder_get_reverse_decode_keyframe:
+ * @decoder: a #GstVideoDecoder
+ *
+ * Queries whether to enable decode keyframe only in reverse playback or
+ * not by the base class.
+ *
+ * Returns: TRUE if decode keyframe only in reverse playback.
+ */
+gboolean
+gst_video_decoder_get_reverse_decode_keyframe (GstVideoDecoder * decoder)
+{
+  g_return_val_if_fail (GST_IS_VIDEO_DECODER (decoder), FALSE);
+
+  return decoder->priv->reverse_decode_keyframe;
 }

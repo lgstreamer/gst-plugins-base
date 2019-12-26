@@ -384,16 +384,6 @@ gst_riff_create_video_caps (guint32 codec_fcc,
         *codec_name = g_strdup ("Divio MPEG-4");
       break;
 
-    case GST_RIFF_DIV3:
-    case GST_MAKE_FOURCC ('d', 'i', 'v', '3'):
-    case GST_MAKE_FOURCC ('D', 'V', 'X', '3'):
-    case GST_MAKE_FOURCC ('d', 'v', 'x', '3'):
-    case GST_MAKE_FOURCC ('D', 'I', 'V', '4'):
-    case GST_MAKE_FOURCC ('d', 'i', 'v', '4'):
-    case GST_MAKE_FOURCC ('D', 'I', 'V', '5'):
-    case GST_MAKE_FOURCC ('d', 'i', 'v', '5'):
-    case GST_MAKE_FOURCC ('D', 'I', 'V', '6'):
-    case GST_MAKE_FOURCC ('d', 'i', 'v', '6'):
     case GST_MAKE_FOURCC ('M', 'P', 'G', '3'):
     case GST_MAKE_FOURCC ('m', 'p', 'g', '3'):
     case GST_MAKE_FOURCC ('c', 'o', 'l', '0'):
@@ -407,26 +397,11 @@ gst_riff_create_video_caps (guint32 codec_fcc,
         *codec_name = g_strdup ("DivX MS-MPEG-4 Version 3");
       break;
 
-    case GST_MAKE_FOURCC ('d', 'i', 'v', 'x'):
-    case GST_MAKE_FOURCC ('D', 'I', 'V', 'X'):
-      caps = gst_caps_new_simple ("video/x-divx",
-          "divxversion", G_TYPE_INT, 4, NULL);
-      if (codec_name)
-        *codec_name = g_strdup ("DivX MPEG-4 Version 4");
-      break;
-
     case GST_MAKE_FOURCC ('B', 'L', 'Z', '0'):
       caps = gst_caps_new_simple ("video/x-divx",
           "divxversion", G_TYPE_INT, 4, NULL);
       if (codec_name)
         *codec_name = g_strdup ("Blizzard DivX");
-      break;
-
-    case GST_MAKE_FOURCC ('D', 'X', '5', '0'):
-      caps = gst_caps_new_simple ("video/x-divx",
-          "divxversion", G_TYPE_INT, 5, NULL);
-      if (codec_name)
-        *codec_name = g_strdup ("DivX MPEG-4 Version 5");
       break;
 
     case GST_MAKE_FOURCC ('M', 'P', 'G', '4'):
@@ -473,6 +448,25 @@ gst_riff_create_video_caps (guint32 codec_fcc,
         *codec_name = g_strdup ("FFmpeg MPEG-4");
       break;
 
+    case GST_RIFF_DIV3:
+    case GST_MAKE_FOURCC ('d', 'i', 'v', '3'):
+    case GST_MAKE_FOURCC ('D', 'V', 'X', '3'):
+    case GST_MAKE_FOURCC ('d', 'v', 'x', '3'):
+      caps = gst_caps_new_simple ("video/x-msmpeg",
+          "msmpegversion", G_TYPE_INT, 43, NULL);
+      if (codec_name)
+        *codec_name = g_strdup ("MPEG-4");
+      break;
+
+    case GST_MAKE_FOURCC ('D', 'X', '5', '0'):
+    case GST_MAKE_FOURCC ('d', 'i', 'v', 'x'):
+    case GST_MAKE_FOURCC ('D', 'I', 'V', 'X'):
+    case GST_MAKE_FOURCC ('D', 'I', 'V', '4'):
+    case GST_MAKE_FOURCC ('d', 'i', 'v', '4'):
+    case GST_MAKE_FOURCC ('D', 'I', 'V', '5'):
+    case GST_MAKE_FOURCC ('d', 'i', 'v', '5'):
+    case GST_MAKE_FOURCC ('D', 'I', 'V', '6'):
+    case GST_MAKE_FOURCC ('d', 'i', 'v', '6'):
     case GST_MAKE_FOURCC ('3', 'I', 'V', '1'):
     case GST_MAKE_FOURCC ('3', 'I', 'V', '2'):
     case GST_MAKE_FOURCC ('X', 'V', 'I', 'D'):
@@ -1280,8 +1274,12 @@ gst_riff_create_audio_caps (guint16 codec_id,
          * so either we calculate the bitrate or mark it as invalid as this
          * would probably confuse timing */
         strf->av_bps = 0;
-        if (strf->channels != 0 && strf->rate != 0 && strf->blockalign != 0) {
-          int spb = ((strf->blockalign - strf->channels * 7) / 2) * 2;
+        if (strf->channels != 0 && strf->rate != 0 && strf->blockalign != 0
+            && strf->bits_per_sample != 0) {
+          int spb =
+              (((strf->blockalign -
+                      strf->channels * 7) / 2) * 2) * 8 /
+              strf->bits_per_sample / strf->channels;
           strf->av_bps =
               gst_util_uint64_scale_int (strf->rate, strf->blockalign, spb);
           GST_DEBUG ("fixing av_bps to calculated value %d of MS ADPCM",
@@ -1478,6 +1476,7 @@ gst_riff_create_audio_caps (guint16 codec_id,
         *codec_name = g_strdup ("MPEG-1 layer 3");
       break;
 
+    case GST_RIFF_WAVE_FORMAT_NMS_VBXADPCM:
     case GST_RIFF_WAVE_FORMAT_AMR_NB:  /* amr-nb */
       caps = gst_caps_new_empty_simple ("audio/AMR");
       if (codec_name)
@@ -1750,6 +1749,12 @@ gst_riff_create_audio_caps (guint16 codec_id,
         caps = gst_caps_new_empty_simple ("application/x-ogg-avi");
         if (codec_name)
           *codec_name = g_strdup ("Ogg-AVI");
+      } else if (subformat_guid[0] == 0xa7fb87af &&
+          subformat_guid[1] == 0x42fb2d02 &&
+          subformat_guid[2] == 0xcd05d4a4 && subformat_guid[3] == 0xdd3b8493) {
+        caps = gst_caps_new_empty_simple ("audio/x-eac3");
+        if (codec_name)
+          *codec_name = g_strdup ("Enhanced AC-3 audio");
       }
 
       if (caps == NULL) {
@@ -1764,6 +1769,15 @@ gst_riff_create_audio_caps (guint16 codec_id,
         if (channel_mask == 0 && strf->channels > 1)
           channel_mask =
               gst_riff_wavext_get_default_channel_mask (strf->channels);
+
+        if (channel_mask != 0 && strf->channels > 1) {
+          if ((guint) strf->channels != (guint) channel_mask) {
+            GST_WARNING ("Align channel-mask to channels");
+            channel_mask =
+                gst_riff_wavext_get_default_channel_mask (strf->channels);
+
+          }
+        }
 
         if ((channel_mask != 0 || strf->channels > 1) &&
             !gst_riff_wavext_add_channel_mask (caps, strf->channels,
@@ -1986,6 +2000,7 @@ gst_riff_create_audio_template_caps (void)
     GST_RIFF_WAVE_FORMAT_ADPCM_IMA_WAV,
     GST_RIFF_WAVE_FORMAT_AMR_NB,
     GST_RIFF_WAVE_FORMAT_AMR_WB,
+    GST_RIFF_WAVE_FORMAT_NMS_VBXADPCM,
     GST_RIFF_WAVE_FORMAT_SIREN,
     /* FILL ME */
   };

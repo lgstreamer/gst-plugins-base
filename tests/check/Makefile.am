@@ -252,6 +252,7 @@ check_PROGRAMS = \
 	libs/videoencoder \
 	libs/videotimecode \
 	libs/xmpwriter \
+	libs/subtitlemeta \
 	pipelines/simple-launch-lines \
 	pipelines/basetime \
 	pipelines/capsfilter-renegotiation \
@@ -816,6 +817,17 @@ libs_videotimecode_CFLAGS = \
 
 libs_videotimecode_LDADD = \
 	$(top_builddir)/gst-libs/gst/video/libgstvideo-@GST_API_VERSION@.la \
+	$(GST_BASE_LIBS) \
+	$(LDADD)
+
+libs_subtitlemeta_CFLAGS = \
+	$(GST_PLUGINS_BASE_CFLAGS) \
+	$(GST_BASE_CFLAGS) \
+	$(AM_CFLAGS)
+
+libs_subtitlemeta_LDADD = \
+	$(top_builddir)/gst-libs/gst/subtitle/libgstsubtitle-@GST_API_VERSION@.la \
+        $(top_builddir)/gst-libs/gst/app/libgstapp-@GST_API_VERSION@.la \
 	$(GST_BASE_LIBS) \
 	$(LDADD)
 

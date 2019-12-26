@@ -634,10 +634,12 @@ parse_picture_frame (ID3TagsWorking * work)
   if (work->parse_size <= 0)
     goto not_enough_data;
 
+#if 0
   if (!gst_tag_list_add_id3_image (work->tags, (guint8 *) work->parse_data,
           work->parse_size, pic_type)) {
     goto error;
   }
+#endif
 
   g_free (mime_str);
   return TRUE;

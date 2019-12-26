@@ -612,11 +612,12 @@ db_select_stream_cb (GstElement * decodebin,
 static void
 db_about_to_finish_cb (GstElement * decodebin, GstURIDecodeBin3 * uridecodebin)
 {
-  if (!uridecodebin->posted_about_to_finish) {
-    uridecodebin->posted_about_to_finish = TRUE;
-    g_signal_emit (uridecodebin,
-        gst_uri_decode_bin3_signals[SIGNAL_ABOUT_TO_FINISH], 0, NULL);
-  }
+  /* FIXME: need to determine whether to use posted_about_to_finish. */
+  uridecodebin->posted_about_to_finish = TRUE;
+
+  GST_DEBUG_OBJECT (uridecodebin, "post about-to-finish");
+  g_signal_emit (uridecodebin,
+      gst_uri_decode_bin3_signals[SIGNAL_ABOUT_TO_FINISH], 0, NULL);
 }
 
 static void

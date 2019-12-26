@@ -208,7 +208,8 @@ pad_blocked_cb (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
   GST_DEBUG_OBJECT (self, "Caps %" GST_PTR_FORMAT " are raw: %d", caps, raw);
   gst_caps_unref (caps);
 
-  if (raw == self->raw)
+  if (raw == self->raw &&
+      gst_ghost_pad_get_target (GST_GHOST_PAD (self->sinkpad)))
     goto unblock;
   self->raw = raw;
 

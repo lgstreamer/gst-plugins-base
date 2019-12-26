@@ -806,9 +806,16 @@ AM_CONDITIONAL(HAVE_PNG, test "x$HAVE_PNG" = "xyes")
 AM_CONDITIONAL(HAVE_JPEG, test "x$HAVE_JPEG" = "xyes")
 
 dnl *** gio-unix-2.0 for tests/check/pipelines/tcp.c ***
+AC_ARG_ENABLE([gio_unix_2_0],
+  [AS_HELP_STRING([--disable-gio_unix_2_0],[disable use of gio_unix_2_0])],
+  [],
+  [enable_gio_unix_2_0=yes])
+
+if test "x${enable_gio_unix_2_0}" != "xno"; then
 PKG_CHECK_MODULES(GIO_UNIX_2_0, gio-unix-2.0 >= 2.24,
     HAVE_GIO_UNIX_2_0="yes",
     HAVE_GIO_UNIX_2_0="no")
+fi
 AM_CONDITIONAL(USE_GIO_UNIX_2_0, test "x$HAVE_GIO_UNIX_2_0" = "xyes")
 
 dnl *** finalize CFLAGS, LDFLAGS, LIBS
@@ -902,6 +909,25 @@ dnl *** output files ***
 
 $MKDIR_P tests/check/orc
 
+dnl whether to include private fuction which is dependent to target platform
+AC_MSG_CHECKING([whether to include private fuction which is dependent to target platform])
+AC_ARG_ENABLE(priv-func,
+  AS_HELP_STRING([--disable-priv-func],[disable including private function]),
+  [
+    case "${enableval}" in
+      yes) HAVE_PRIV_FUNC=yes ;;
+      no)  HAVE_PRIV_FUNC=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --disable-priv-func) ;;
+    esac
+  ],
+[HAVE_PRIV_FUNC=yes]) dnl Default value
+
+AM_CONDITIONAL(HAVE_PRIV_FUNC, test "x$HAVE_PRIV_FUNC" = "xyes")
+if test "x$HAVE_PRIV_FUNC" = "xyes"; then
+  AC_DEFINE(HAVE_PRIV_FUNC, 1,
+    [Define if we should include private function])
+fi
+
 AC_CONFIG_FILES(
 Makefile
 gst/Makefile
@@ -960,6 +986,7 @@ gst-libs/gst/riff/Makefile
 gst-libs/gst/rtp/Makefile
 gst-libs/gst/rtsp/Makefile
 gst-libs/gst/sdp/Makefile
+gst-libs/gst/subtitle/Makefile
 gst-libs/gst/tag/Makefile
 gst-libs/gst/pbutils/Makefile
 gst-libs/gst/pbutils/gstpluginsbaseversion.h
@@ -992,6 +1019,8 @@ pkgconfig/gstreamer-gl.pc
 pkgconfig/gstreamer-gl-uninstalled.pc
 pkgconfig/gstreamer-plugins-base.pc
 pkgconfig/gstreamer-plugins-base-uninstalled.pc
+pkgconfig/gstreamer-subtitle.pc
+pkgconfig/gstreamer-subtitle-uninstalled.pc
 tests/Makefile
 tests/check/Makefile
 tests/examples/Makefile

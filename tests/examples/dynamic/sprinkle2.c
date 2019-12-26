@@ -33,6 +33,8 @@
 
 #include <gst/gst.h>
 
+#define UNUSED(x) ((void)x)
+
 static GstElement *pipeline, *adder;
 static GMainLoop *loop;
 
@@ -253,6 +255,7 @@ main (int argc, char *argv[])
 
   res = gst_element_link_many (adder, filter, convert, sink, NULL);
   g_assert (res);
+  UNUSED (res);
 
   /* setup message handling */
   bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline));

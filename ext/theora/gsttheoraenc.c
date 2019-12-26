@@ -69,6 +69,8 @@
 
 #include "gsttheoraenc.h"
 
+#define UNUSED(x) ((void)x)
+
 #define GST_CAT_DEFAULT theoraenc_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
@@ -996,6 +998,7 @@ theora_enc_handle_frame (GstVideoEncoder * benc, GstVideoCodecFrame * frame)
 
     /* none of the failure cases can happen here */
     g_assert (res == 0);
+    UNUSED (res);
 
     if (enc->multipass_cache_fd
         && enc->multipass_mode == MULTIPASS_MODE_FIRST_PASS) {

@@ -32,6 +32,10 @@
 GST_DEBUG_CATEGORY_STATIC (ssa_parse_debug);
 #define GST_CAT_DEFAULT ssa_parse_debug
 
+/* whitelisted field for output caps. */
+static const gchar *whitelisted_text_fields[] =
+    { "track-num", "seekable", "trickable", NULL };
+
 static GstStaticPadTemplate sink_templ = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
@@ -139,6 +143,28 @@ gst_ssa_parse_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 }
 
 static gboolean
+append_text_field (GQuark field_id, const GValue * value, gpointer user_data)
+{
+  GstCaps *caps = user_data;
+  gchar *value_str = gst_value_serialize (value);
+  gint i;
+
+  /* append whitelisted fields */
+  for (i = 0; whitelisted_text_fields[i]; i++) {
+    if (!g_ascii_strncasecmp (g_quark_to_string (field_id),
+            whitelisted_text_fields[i], strlen (whitelisted_text_fields[i]))) {
+      GST_INFO ("append field [%s:%s]", g_quark_to_string (field_id),
+          value_str);
+      gst_caps_set_value (caps, g_quark_to_string (field_id), value);
+    }
+  }
+
+  g_free (value_str);
+
+  return TRUE;
+}
+
+static gboolean
 gst_ssa_parse_setcaps (GstPad * sinkpad, GstCaps * caps)
 {
   GstSsaParse *parse = GST_SSA_PARSE (GST_PAD_PARENT (sinkpad));
@@ -208,6 +234,9 @@ gst_ssa_parse_setcaps (GstPad * sinkpad, GstCaps * caps)
   outcaps = gst_caps_new_simple ("text/x-raw",
       "format", G_TYPE_STRING, "pango-markup", NULL);
 
+  /* append whitelisted information to output caps */
+  gst_structure_foreach (s, append_text_field, outcaps);
+
   ret = gst_pad_set_caps (parse->srcpad, outcaps);
   gst_caps_unref (outcaps);
 
@@ -262,6 +291,7 @@ gst_ssa_parse_remove_override_codes (GstSsaParse * parse, gchar * txt)
  * gst_ssa_parse_push_line:
  * @parse: caller element
  * @txt: text to push
+ * @size: text size need to be parse
  * @start: timestamp for the buffer
  * @duration: duration for the buffer
  *
@@ -271,27 +301,137 @@ gst_ssa_parse_remove_override_codes (GstSsaParse * parse, gchar * txt)
  * Returns: result of the push of the created buffer
  */
 static GstFlowReturn
-gst_ssa_parse_push_line (GstSsaParse * parse, gchar * txt,
+gst_ssa_parse_push_line (GstSsaParse * parse, gchar * txt, gint size,
     GstClockTime start, GstClockTime duration)
 {
   GstFlowReturn ret;
   GstBuffer *buf;
-  gchar *t, *escaped;
+  gchar *t, *text, *p, *escaped, *p_start, *p_end;
   gint num, i, len;
+  GstClockTime start_time = G_MAXUINT64, end_time = 0;
 
-  num = atoi (txt);
-  GST_LOG_OBJECT (parse, "Parsing line #%d at %" GST_TIME_FORMAT,
-      num, GST_TIME_ARGS (start));
-
-  /* skip all non-text fields before the actual text */
+  p = text = g_malloc (size + 1);
+  *p = '\0';
   t = txt;
-  for (i = 0; i < 8; ++i) {
-    t = strchr (t, ',');
+
+  /* there are may have multiple dialogue lines at a time */
+  while (*t) {
+    /* ignore leading white space characters */
+    while (isspace (*t))
+      t++;
+
+    /* ignore Format: and Style: lines */
+    if (strncmp (t, "Format:", 7) == 0 || strncmp (t, "Style:", 6) == 0) {
+      while (*t != '\0' && *t != '\n') {
+        t++;
+      }
+    }
+
+    if (*t == '\0')
+      break;
+
+    /* continue with next line */
+    if (*t == '\n') {
+      t++;
+      continue;
+    }
+
+    if (strncmp (t, "Dialogue:", 9) != 0) {
+      /* not started with "Dialogue:", it must be a line trimmed by demuxer */
+      num = atoi (t);
+      GST_LOG_OBJECT (parse, "Parsing line #%d at %" GST_TIME_FORMAT,
+          num, GST_TIME_ARGS (start));
+
+      /* skip all non-text fields before the actual text */
+      for (i = 0; i < 8; ++i) {
+        t = strchr (t, ',');
+        if (t == NULL)
+          break;
+        ++t;
+      }
+    } else {
+      /* started with "Dialogue:", update timestamp and duration */
+      /* time format are like Dialog:Mark,0:00:01.02,0:00:03.04,xx,xxx,... */
+      guint hour, min, sec, msec, len;
+      GstClockTime tmp;
+      gchar t_str[12] = { 0 };
+
+      /* find the first ',' */
+      p_start = strchr (t, ',');
+      if (p_start)
+        p_end = strchr (++p_start, ',');
+
+      if (p_start && p_end) {
+        /* copy text between first ',' and second ',' */
+        strncpy (t_str, p_start, p_end - p_start);
+        if (sscanf (t_str, "%u:%u:%u.%u", &hour, &min, &sec, &msec) == 4) {
+          tmp =
+              ((hour * 3600) + (min * 60) + sec) * GST_SECOND +
+              msec * GST_MSECOND;
+          GST_DEBUG_OBJECT (parse, "Get start time:%02d:%02d:%02d:%03d\n", hour,
+              min, sec, msec);
+          if (start_time > tmp)
+            start_time = tmp;
+        } else {
+          GST_WARNING_OBJECT (parse,
+              "failed to parse ssa start timestamp string :%s", t_str);
+        }
+
+        p_start = p_end;
+        p_end = strchr (++p_start, ',');
+        if (p_end) {
+          /* copy text between second ',' and third ',' */
+          strncpy (t_str, p_start, p_end - p_start);
+          if (sscanf (t_str, "%u:%u:%u.%u", &hour, &min, &sec, &msec) == 4) {
+            tmp =
+                ((hour * 3600) + (min * 60) + sec) * GST_SECOND +
+                msec * GST_MSECOND;
+            GST_DEBUG_OBJECT (parse, "Get end time:%02d:%02d:%02d:%03d\n", hour,
+                min, sec, msec);
+            if (end_time < tmp)
+              end_time = tmp;
+          } else {
+            GST_WARNING_OBJECT (parse,
+                "failed to parse ssa end timestamp string :%s", t_str);
+          }
+        }
+      }
+
+      /* now skip all non-text fields before the actual text */
+      for (i = 0; i <= 8; ++i) {
+        t = strchr (t, ',');
+        if (t == NULL)
+          break;
+        ++t;
+      }
+    }
+
+    /* line end before expected number of ',', not a Dialogue line */
     if (t == NULL)
-      return GST_FLOW_ERROR;
-    ++t;
+      break;
+
+    /* if not the first line, and the last character of previous line is '\0',
+     * then replace it with '\N' */
+    if (p != text && *p == '\0') {
+      *p++ = '\\';
+      *p++ = 'N';
+    }
+
+    /* copy all actual text of this line */
+    while ((*t != '\0') && (*t != '\n'))
+      *p++ = *t++;
+
+    /* add a terminator at the end */
+    *p = '\0';
   }
 
+  /* not valid text found in this buffer return OK to let caller unref buffer */
+  if (strlen (text) <= 0) {
+    GST_WARNING_OBJECT (parse, "Not valid text found in this buffer\n");
+    return GST_FLOW_ERROR;
+  }
+
+  t = text;
   GST_LOG_OBJECT (parse, "Text : %s", t);
 
   if (gst_ssa_parse_remove_override_codes (parse, t)) {
@@ -309,13 +449,22 @@ gst_ssa_parse_push_line (GstSsaParse * parse, gchar * txt,
   gst_buffer_fill (buf, 0, escaped, len + 1);
   gst_buffer_set_size (buf, len);
   g_free (escaped);
+  g_free (t);
 
-  GST_BUFFER_TIMESTAMP (buf) = start;
-  GST_BUFFER_DURATION (buf) = duration;
+  if (start_time != G_MAXUINT64)
+    GST_BUFFER_TIMESTAMP (buf) = start_time;
+  else
+    GST_BUFFER_TIMESTAMP (buf) = start;
+
+  if (end_time > start_time)
+    GST_BUFFER_DURATION (buf) = end_time - start_time;
+  else
+    GST_BUFFER_DURATION (buf) = duration;
 
   GST_LOG_OBJECT (parse, "Pushing buffer with timestamp %" GST_TIME_FORMAT
-      " and duration %" GST_TIME_FORMAT, GST_TIME_ARGS (start),
-      GST_TIME_ARGS (duration));
+      " and duration %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)),
+      GST_TIME_ARGS (GST_BUFFER_DURATION (buf)));
 
   ret = gst_pad_push (parse->srcpad, buf);
 
@@ -335,6 +484,7 @@ gst_ssa_parse_chain (GstPad * sinkpad, GstObject * parent, GstBuffer * buf)
   GstClockTime ts;
   gchar *txt;
   GstMapInfo map;
+  gint size;
 
   if (G_UNLIKELY (!parse->framed))
     goto not_framed;
@@ -352,13 +502,15 @@ gst_ssa_parse_chain (GstPad * sinkpad, GstObject * parent, GstBuffer * buf)
   /* make double-sure it's 0-terminated and all */
   gst_buffer_map (buf, &map, GST_MAP_READ);
   txt = g_strndup ((gchar *) map.data, map.size);
+  size = map.size;
   gst_buffer_unmap (buf, &map);
 
   if (txt == NULL)
     goto empty_text;
 
   ts = GST_BUFFER_TIMESTAMP (buf);
-  ret = gst_ssa_parse_push_line (parse, txt, ts, GST_BUFFER_DURATION (buf));
+  ret =
+      gst_ssa_parse_push_line (parse, txt, size, ts, GST_BUFFER_DURATION (buf));
 
   if (ret != GST_FLOW_OK && GST_CLOCK_TIME_IS_VALID (ts)) {
     GstSegment segment;

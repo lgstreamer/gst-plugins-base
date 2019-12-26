@@ -231,6 +231,9 @@ static const struct wl_shell_surface_listener shell_surface_listener = {
 static void
 destroy_surfaces (GstGLWindowWaylandEGL * window_egl)
 {
+  GstGLDisplayWayland *display =
+      GST_GL_DISPLAY_WAYLAND (GST_GL_WINDOW (window_egl)->display);
+
   if (window_egl->window.subsurface) {
     wl_subsurface_destroy (window_egl->window.subsurface);
     window_egl->window.subsurface = NULL;
@@ -238,6 +241,10 @@ destroy_surfaces (GstGLWindowWaylandEGL * window_egl)
   if (window_egl->window.shell_surface) {
     wl_shell_surface_destroy (window_egl->window.shell_surface);
     window_egl->window.shell_surface = NULL;
+  }
+  if (window_egl->window.foreign_surface && !display->subcompositor) {
+    window_egl->window.foreign_surface = NULL;
+    window_egl->window.surface = NULL;
   }
   if (window_egl->window.surface) {
     wl_surface_destroy (window_egl->window.surface);
@@ -256,6 +263,14 @@ create_surfaces (GstGLWindowWaylandEGL * window_egl)
       GST_GL_DISPLAY_WAYLAND (GST_GL_WINDOW (window_egl)->display);
   gint width, height;
 
+  if (!display->subcompositor && window_egl->window.foreign_surface) {
+    GST_WARNING_OBJECT (window_egl,
+        "Wayland server does not support subsurfaces");
+    /* use foreign_surface as surface in case of wayland server does not
+     * support subsurface */
+    window_egl->window.surface = window_egl->window.foreign_surface;
+  }
+
   if (!window_egl->window.surface) {
     window_egl->window.surface =
         wl_compositor_create_surface (display->compositor);
@@ -264,44 +279,33 @@ create_surfaces (GstGLWindowWaylandEGL * window_egl)
           window_egl->window.queue);
   }
 
-  if (window_egl->window.foreign_surface) {
-    /* (re)parent */
-    if (!display->subcompositor) {
-      GST_ERROR_OBJECT (window_egl,
-          "Wayland server does not support subsurfaces");
-      window_egl->window.foreign_surface = NULL;
-      goto shell_window;
-    }
+  if (!window_egl->window.foreign_surface) {
+    window_egl->window.shell_surface =
+        wl_shell_get_shell_surface (display->shell, window_egl->window.surface);
+    if (window_egl->window.queue)
+      wl_proxy_set_queue ((struct wl_proxy *) window_egl->window.shell_surface,
+          window_egl->window.queue);
 
-    if (!window_egl->window.subsurface) {
-      window_egl->window.subsurface =
-          wl_subcompositor_get_subsurface (display->subcompositor,
-          window_egl->window.surface, window_egl->window.foreign_surface);
-      if (window_egl->window.queue)
-        wl_proxy_set_queue ((struct wl_proxy *) window_egl->window.subsurface,
-            window_egl->window.queue);
+    wl_shell_surface_add_listener (window_egl->window.shell_surface,
+        &shell_surface_listener, window_egl);
 
-      wl_subsurface_set_position (window_egl->window.subsurface,
-          window_egl->window.window_x, window_egl->window.window_y);
-      wl_subsurface_set_desync (window_egl->window.subsurface);
-    }
-  } else {
-  shell_window:
-    if (!window_egl->window.shell_surface) {
-      window_egl->window.shell_surface =
-          wl_shell_get_shell_surface (display->shell,
-          window_egl->window.surface);
-      if (window_egl->window.queue)
-        wl_proxy_set_queue ((struct wl_proxy *) window_egl->
-            window.shell_surface, window_egl->window.queue);
+    wl_shell_surface_set_title (window_egl->window.shell_surface,
+        "OpenGL Renderer");
+    wl_shell_surface_set_toplevel (window_egl->window.shell_surface);
+  }
 
-      wl_shell_surface_add_listener (window_egl->window.shell_surface,
-          &shell_surface_listener, window_egl);
+  if (display->subcompositor && window_egl->window.foreign_surface
+      && !window_egl->window.subsurface) {
+    window_egl->window.subsurface =
+        wl_subcompositor_get_subsurface (display->subcompositor,
+        window_egl->window.surface, window_egl->window.foreign_surface);
+    if (window_egl->window.queue)
+      wl_proxy_set_queue ((struct wl_proxy *) window_egl->window.subsurface,
+          window_egl->window.queue);
 
-      wl_shell_surface_set_title (window_egl->window.shell_surface,
-          "OpenGL Renderer");
-      wl_shell_surface_set_toplevel (window_egl->window.shell_surface);
-    }
+    wl_subsurface_set_position (window_egl->window.subsurface,
+        window_egl->window.window_x, window_egl->window.window_y);
+    wl_subsurface_set_desync (window_egl->window.subsurface);
   }
 
   if (window_egl->window.window_width > 0)
@@ -498,6 +502,7 @@ draw_cb (gpointer data)
   GstGLWindowWaylandEGL *window_egl = data;
   GstGLWindow *window = GST_GL_WINDOW (window_egl);
   GstGLContext *context = gst_gl_window_get_context (window);
+  gint64 start = 0, end = 0;
 
   create_surfaces (window_egl);
 
@@ -511,10 +516,24 @@ draw_cb (gpointer data)
     gst_gl_window_resize (window, width, height);
   }
 
+  start = g_get_monotonic_time ();
+
   if (window->draw)
     window->draw (window->draw_data);
 
+  end = g_get_monotonic_time ();
+  GST_TRACE_OBJECT (context,
+      "log=GL_DRAW, term=%lld, time=%lld",
+      end - start, g_get_monotonic_time ());
+
+  start = g_get_monotonic_time ();
+
   gst_gl_context_swap_buffers (context);
+
+  end = g_get_monotonic_time ();
+  GST_TRACE_OBJECT (context,
+      "log=EGL_SWAP, term=%lld, time=%lld",
+      end - start, g_get_monotonic_time ());
 
   if (window_egl->window.subsurface)
     wl_subsurface_set_desync (window_egl->window.subsurface);

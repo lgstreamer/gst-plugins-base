@@ -108,11 +108,89 @@ fail:
 }
 
 static GstElement *
+create_feature_convert_element (const GstCaps * from_caps,
+    const GstCaps * to_caps)
+{
+  GstElement *converter = NULL;
+  GstElementFactory *factory = NULL;
+  GstCapsFeatures *from_feature = NULL, *to_feature = NULL;
+  GList *list_all = NULL, *list_sink = NULL, *list_src = NULL;
+  GstCaps *caps_intermediate;
+  GstStructure *structure;
+  gchar *tmp1, *tmp2;
+
+  /* check features */
+  from_feature = gst_caps_get_features (from_caps, 0);
+  to_feature = gst_caps_get_features (to_caps, 0);
+  if (gst_caps_features_is_equal (from_feature, to_feature)) {
+    return NULL;
+  }
+
+  tmp1 = gst_caps_features_to_string (from_feature);
+  tmp2 = gst_caps_features_to_string (to_feature);
+  GST_INFO ("create converter for caps features: from %s, to %s", tmp1, tmp2);
+  g_free (tmp1);
+  g_free (tmp2);
+
+  /* prepare intermediate caps */
+  structure = gst_caps_get_structure (from_caps, 0);
+  caps_intermediate =
+      gst_caps_new_simple (gst_structure_get_name (structure), NULL, NULL);
+  gst_caps_set_features (caps_intermediate, 0,
+      gst_caps_features_copy (to_feature));
+
+  tmp1 = gst_caps_to_string (caps_intermediate);
+  GST_INFO ("feature convert intermediate caps: %s", tmp1);
+  g_free (tmp1);
+
+  /* get element that matchs the caps */
+  list_all = gst_element_factory_list_get_elements
+      (GST_ELEMENT_FACTORY_TYPE_MEDIA_ANY, GST_RANK_MARGINAL);
+  list_sink = gst_element_factory_list_filter (list_all,
+      from_caps, GST_PAD_SINK, FALSE);
+  list_src = gst_element_factory_list_filter (list_sink,
+      caps_intermediate, GST_PAD_SRC, FALSE);
+
+  /* get factory */
+  list_src = g_list_sort (list_src, gst_plugin_feature_rank_compare_func);
+  if (g_list_length (list_src) > 0) {
+    factory = GST_ELEMENT_FACTORY_CAST (g_list_nth_data (list_src, 0));
+  }
+
+  /* create converter */
+  if (factory) {
+    converter = gst_element_factory_create (factory, NULL);
+
+    if (converter) {
+      tmp1 = gst_element_get_name (converter);
+      GST_INFO ("create element for memory conversion, %s", tmp1);
+      g_free (tmp1);
+    }
+  }
+
+  /* free components */
+  if (caps_intermediate) {
+    gst_caps_unref (caps_intermediate);
+  }
+  if (list_all) {
+    gst_plugin_feature_list_free (list_all);
+  }
+  if (list_sink) {
+    gst_plugin_feature_list_free (list_sink);
+  }
+  if (list_src) {
+    gst_plugin_feature_list_free (list_src);
+  }
+
+  return converter;
+}
+
+static GstElement *
 build_convert_frame_pipeline (GstElement ** src_element,
     GstElement ** sink_element, const GstCaps * from_caps,
     GstVideoCropMeta * cmeta, const GstCaps * to_caps, GError ** err)
 {
-  GstElement *vcrop = NULL, *csp = NULL, *csp2 = NULL, *vscale = NULL;
+  GstElement *vcrop = NULL, *csp = NULL, *csp2 = NULL, *vscale = NULL, *mcvt = NULL;
   GstElement *src = NULL, *sink = NULL, *encoder = NULL, *pipeline;
   GstVideoInfo info;
   GError *error = NULL;
@@ -136,6 +214,9 @@ build_convert_frame_pipeline (GstElement ** src_element,
       !create_element ("appsink", &sink, &error))
     goto no_elements;
 
+  /* create memory feature converter */
+  mcvt = create_feature_convert_element (from_caps, to_caps);
+
   pipeline = gst_pipeline_new ("videoconvert-pipeline");
   if (pipeline == NULL)
     goto no_pipeline;
@@ -144,7 +225,11 @@ build_convert_frame_pipeline (GstElement ** src_element,
   g_object_set (vscale, "add-borders", TRUE, NULL);
 
   GST_DEBUG ("adding elements");
-  gst_bin_add_many (GST_BIN (pipeline), src, csp, vscale, sink, NULL);
+  if (mcvt) {
+    gst_bin_add_many (GST_BIN (pipeline), src, mcvt, csp, vscale, sink, NULL);
+  } else {
+    gst_bin_add_many (GST_BIN (pipeline), src, csp, vscale, sink, NULL);
+  }
   if (vcrop)
     gst_bin_add_many (GST_BIN (pipeline), vcrop, csp2, NULL);
 
@@ -165,9 +250,18 @@ build_convert_frame_pipeline (GstElement ** src_element,
 
   /* FIXME: linking is still way too expensive, profile this properly */
   if (vcrop) {
-    GST_DEBUG ("linking src->csp2");
-    if (!gst_element_link_pads (src, "src", csp2, "sink"))
-      goto link_failed;
+    if (mcvt) {
+      GST_DEBUG ("linking src->mcvt");
+      if (!gst_element_link_pads (src, "src", mcvt, "sink"))
+        goto link_failed;
+      GST_DEBUG ("linking mcvt->csp2");
+      if (!gst_element_link_pads (mcvt, "src", csp2, "sink"))
+        goto link_failed;
+    } else {
+      GST_DEBUG ("linking src->csp2");
+      if (!gst_element_link_pads (src, "src", csp2, "sink"))
+        goto link_failed;
+    }
 
     GST_DEBUG ("linking csp2->vcrop");
     if (!gst_element_link_pads (csp2, "src", vcrop, "sink"))
@@ -177,9 +271,18 @@ build_convert_frame_pipeline (GstElement ** src_element,
     if (!gst_element_link_pads (vcrop, "src", csp, "sink"))
       goto link_failed;
   } else {
-    GST_DEBUG ("linking src->csp");
-    if (!gst_element_link_pads (src, "src", csp, "sink"))
-      goto link_failed;
+    if (mcvt) {
+      GST_DEBUG ("linking src->mcvt");
+      if (!gst_element_link_pads (src, "src", mcvt, "sink"))
+        goto link_failed;
+      GST_DEBUG ("linking mcvt->csp");
+      if (!gst_element_link_pads (mcvt, "src", csp, "sink"))
+        goto link_failed;
+    } else {
+      GST_DEBUG ("linking src->csp");
+      if (!gst_element_link_pads (src, "src", csp, "sink"))
+        goto link_failed;
+    }
   }
 
   GST_DEBUG ("linking csp->vscale");
@@ -234,6 +337,8 @@ no_elements:
       gst_object_unref (src);
     if (vcrop)
       gst_object_unref (vcrop);
+    if (mcvt)
+      gst_object_unref (mcvt);
     if (csp)
       gst_object_unref (csp);
     if (csp2)

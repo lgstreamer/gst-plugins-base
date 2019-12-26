@@ -184,10 +184,13 @@ _gl_mem_create (GstGLMemoryPBO * gl_mem, GError ** error)
 {
   GstGLContext *context = gl_mem->mem.mem.context;
   GstGLBaseMemoryAllocatorClass *alloc_class;
+  gint64 start = 0, end = 0;
 
   alloc_class = GST_GL_BASE_MEMORY_ALLOCATOR_CLASS (parent_class);
   if (!alloc_class->create ((GstGLBaseMemory *) gl_mem, error))
     return FALSE;
+
+  start = g_get_monotonic_time ();
 
   if (CONTEXT_SUPPORTS_PBO_DOWNLOAD (context)
       || CONTEXT_SUPPORTS_PBO_UPLOAD (context)) {
@@ -214,6 +217,11 @@ _gl_mem_create (GstGLMemoryPBO * gl_mem, GError ** error)
 
     GST_CAT_LOG (GST_CAT_GL_MEMORY, "generated pbo %u", gl_mem->pbo->id);
   }
+
+  end = g_get_monotonic_time ();
+  GST_TRACE_OBJECT (context,
+      "log=GL_BIND, term=%lld, time=%lld",
+      end - start, g_get_monotonic_time ());
 
   return TRUE;
 }

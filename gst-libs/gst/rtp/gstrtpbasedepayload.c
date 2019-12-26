@@ -31,9 +31,6 @@
 GST_DEBUG_CATEGORY_STATIC (rtpbasedepayload_debug);
 #define GST_CAT_DEFAULT (rtpbasedepayload_debug)
 
-#define GST_RTP_BASE_DEPAYLOAD_GET_PRIVATE(obj)  \
-   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_RTP_BASE_DEPAYLOAD, GstRTPBaseDepayloadPrivate))
-
 struct _GstRTPBaseDepayloadPrivate
 {
   GstClockTime npt_start;
@@ -61,6 +58,7 @@ struct _GstRTPBaseDepayloadPrivate
 /* Filter signals and args */
 enum
 {
+  SIGNAL_PACKET_LOSS,
   /* FILL ME */
   LAST_SIGNAL
 };
@@ -71,6 +69,8 @@ enum
   PROP_STATS,
   PROP_LAST
 };
+
+static guint gst_rtp_base_signals[LAST_SIGNAL] = { 0 };
 
 static void gst_rtp_base_depayload_finalize (GObject * object);
 static void gst_rtp_base_depayload_set_property (GObject * object,
@@ -94,6 +94,8 @@ static gboolean gst_rtp_base_depayload_handle_event (GstRTPBaseDepayload *
     filter, GstEvent * event);
 
 static GstElementClass *parent_class = NULL;
+static gint private_offset = 0;
+
 static void gst_rtp_base_depayload_class_init (GstRTPBaseDepayloadClass *
     klass);
 static void gst_rtp_base_depayload_init (GstRTPBaseDepayload * rtpbasepayload,
@@ -118,12 +120,24 @@ gst_rtp_base_depayload_get_type (void)
       0,
       (GInstanceInitFunc) gst_rtp_base_depayload_init,
     };
+    GType _type;
 
-    g_once_init_leave ((gsize *) & rtp_base_depayload_type,
-        g_type_register_static (GST_TYPE_ELEMENT, "GstRTPBaseDepayload",
-            &rtp_base_depayload_info, G_TYPE_FLAG_ABSTRACT));
+    _type = g_type_register_static (GST_TYPE_ELEMENT, "GstRTPBaseDepayload",
+        &rtp_base_depayload_info, G_TYPE_FLAG_ABSTRACT);
+
+    private_offset =
+        g_type_add_instance_private (_type,
+        sizeof (GstRTPBaseDepayloadPrivate));
+
+    g_once_init_leave ((gsize *) & rtp_base_depayload_type, _type);
   }
   return rtp_base_depayload_type;
+}
+
+static inline GstRTPBaseDepayloadPrivate *
+gst_rtp_base_depayload_get_instance_private (GstRTPBaseDepayload * self)
+{
+  return (G_STRUCT_MEMBER_P (self, private_offset));
 }
 
 static void
@@ -136,7 +150,8 @@ gst_rtp_base_depayload_class_init (GstRTPBaseDepayloadClass * klass)
   gstelement_class = (GstElementClass *) klass;
   parent_class = g_type_class_peek_parent (klass);
 
-  g_type_class_add_private (klass, sizeof (GstRTPBaseDepayloadPrivate));
+  if (private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &private_offset);
 
   gobject_class->finalize = gst_rtp_base_depayload_finalize;
   gobject_class->set_property = gst_rtp_base_depayload_set_property;
@@ -169,6 +184,10 @@ gst_rtp_base_depayload_class_init (GstRTPBaseDepayloadClass * klass)
 
   gstelement_class->change_state = gst_rtp_base_depayload_change_state;
 
+  gst_rtp_base_signals[SIGNAL_PACKET_LOSS] =
+      g_signal_new ("packet-loss", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_INT);
+
   klass->packet_lost = gst_rtp_base_depayload_packet_lost;
   klass->handle_event = gst_rtp_base_depayload_handle_event;
 
@@ -183,7 +202,8 @@ gst_rtp_base_depayload_init (GstRTPBaseDepayload * filter,
   GstPadTemplate *pad_template;
   GstRTPBaseDepayloadPrivate *priv;
 
-  priv = GST_RTP_BASE_DEPAYLOAD_GET_PRIVATE (filter);
+  priv = gst_rtp_base_depayload_get_instance_private (filter);
+
   filter->priv = priv;
 
   GST_DEBUG_OBJECT (filter, "init");
@@ -378,6 +398,8 @@ gst_rtp_base_depayload_handle_buffer (GstRTPBaseDepayload * filter,
           /* seqnum > next_seqnum, we are missing some packets, this is always a
            * DISCONT. */
           GST_LOG_OBJECT (filter, "%d missing packets", gap);
+          g_signal_emit (filter, gst_rtp_base_signals[SIGNAL_PACKET_LOSS], 0,
+              -gap);
           discont = TRUE;
         } else {
           /* seqnum < next_seqnum, we have seen this packet before or the sender

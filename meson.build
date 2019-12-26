@@ -260,6 +260,10 @@ else
   core_conf.set('DISABLE_ORC', 1)
 endif
 
+if not get_option('disable_priv_func')
+  core_conf.set('HAVE_PRIV_FUNC', '1')
+endif
+
 # Used to build SSE* things in audio-resampler
 sse_args = '-msse'
 sse2_args = '-msse2'

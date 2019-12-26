@@ -132,6 +132,7 @@ G_BEGIN_DECLS
 #define GST_RIFF_00pc GST_MAKE_FOURCC ('0', '0', 'p', 'c')
 #define GST_RIFF_01pc GST_MAKE_FOURCC ('0', '1', 'p', 'c')
 #define GST_RIFF_00dc GST_MAKE_FOURCC ('0', '0', 'd', 'c')
+#define GST_RIFF_00dd GST_MAKE_FOURCC ('0', '0', 'd', 'd')
 #define GST_RIFF_00dx GST_MAKE_FOURCC ('0', '0', 'd', 'x')
 #define GST_RIFF_00db GST_MAKE_FOURCC ('0', '0', 'd', 'b')
 #define GST_RIFF_00xx GST_MAKE_FOURCC ('0', '0', 'x', 'x')

@@ -688,7 +688,9 @@ gst_audio_resample_check_discont (GstAudioResample * resample, GstBuffer * buf)
   /* allow even up to more samples, since sink is not so strict anyway,
    * so give that one a chance to handle this as configured */
   delta = ABS ((gint64) (offset - resample->samples_in));
-  if (delta <= (resample->in.rate >> 5))
+  /* The delta is about 150ms in WOSQRTK-1329, WOSQRTK-1339, WOSQRTK-1343, WOSQRTK-3295.
+   * We need to increase the threshould value for those files. */
+  if (delta <= ((guint64) resample->in.rate * 15 / 100))
     return FALSE;
 
   GST_WARNING_OBJECT (resample,

@@ -174,6 +174,7 @@ _gl_mem_create (GstGLMemoryEGL * gl_mem, GError ** error)
   GstGLContext *context = gl_mem->mem.mem.context;
   const GstGLFuncs *gl = context->gl_vtable;
   GstGLBaseMemoryAllocatorClass *alloc_class;
+  gint64 start = 0, end = 0;
 
   if (!gst_gl_context_check_feature (GST_GL_CONTEXT (context),
           "EGL_KHR_image_base")) {
@@ -185,6 +186,8 @@ _gl_mem_create (GstGLMemoryEGL * gl_mem, GError ** error)
   alloc_class = GST_GL_BASE_MEMORY_ALLOCATOR_CLASS (parent_class);
   if (!alloc_class->create ((GstGLBaseMemory *) gl_mem, error))
     return FALSE;
+
+  start = g_get_monotonic_time ();
 
   if (gl_mem->image == NULL) {
     gl_mem->image = gst_egl_image_from_texture (context,
@@ -201,6 +204,11 @@ _gl_mem_create (GstGLMemoryEGL * gl_mem, GError ** error)
     gl->EGLImageTargetTexture2D (GL_TEXTURE_2D,
         gst_egl_image_get_image (GST_EGL_IMAGE (gl_mem->image)));
   }
+
+  end = g_get_monotonic_time ();
+  GST_TRACE_OBJECT (context,
+      "log=GL_BIND, term=%lld, time=%lld",
+      end - start, g_get_monotonic_time ());
 
   return TRUE;
 }

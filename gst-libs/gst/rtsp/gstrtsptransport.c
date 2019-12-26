@@ -96,12 +96,6 @@ static const GstRTSPTransMap transports[] = {
   {"srtpf", GST_RTSP_TRANS_RTP, GST_RTSP_PROFILE_SAVPF,
         GST_RTSP_LOWER_TRANS_UDP_MCAST, "application/x-srtp",
       {"rtpbin", "rtpdec"}},
-  {"x-real-rdt", GST_RTSP_TRANS_RDT, GST_RTSP_PROFILE_AVP,
-        GST_RTSP_LOWER_TRANS_UNKNOWN, "application/x-rdt",
-      {"rdtmanager", NULL}},
-  {"x-pn-tng", GST_RTSP_TRANS_RDT, GST_RTSP_PROFILE_AVP,
-        GST_RTSP_LOWER_TRANS_UNKNOWN, "application/x-rdt",
-      {"rdtmanager", NULL}},
   {NULL, GST_RTSP_TRANS_UNKNOWN, GST_RTSP_PROFILE_UNKNOWN,
       GST_RTSP_LOWER_TRANS_UNKNOWN, NULL, {NULL, NULL}}
 };

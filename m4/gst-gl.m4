@@ -117,6 +117,33 @@ AC_ARG_ENABLE([dispmanx],
        *) AC_MSG_ERROR([bad value ${enableval} for --enable-dispmanx]) ;;
      esac],[NEED_DISPMANX=auto])
 
+AC_ARG_ENABLE([gbm],
+     [  --enable-gbm        Enable Mesa3D GBM support (requires EGL) @<:@default=auto@:>@],
+     [case "${enableval}" in
+       yes)  NEED_GBM=yes ;;
+       no)   NEED_GBM=no ;;
+       auto) NEED_GBM=auto ;;
+       *) AC_MSG_ERROR([bad value ${enableval} for --enable-gbm]) ;;
+     esac],[NEED_GBM=auto])
+
+AC_ARG_ENABLE([png],
+     [  --enable-png        Enable libpng support @<:@default=auto@:>@],
+     [case "${enableval}" in
+       yes)  NEED_PNG=yes ;;
+       no)   NEED_PNG=no ;;
+       auto) NEED_PNG=auto ;;
+       *) AC_MSG_ERROR([bad value ${enableval} for --enable-png]) ;;
+     esac],[NEED_PNG=auto])
+
+AC_ARG_ENABLE([jpeg],
+     [  --enable-jpeg        Enable libjpeg support @<:@default=auto@:>@],
+     [case "${enableval}" in
+       yes)  NEED_JPEG=yes ;;
+       no)   NEED_JPEG=no ;;
+       auto) NEED_JPEG=auto ;;
+       *) AC_MSG_ERROR([bad value ${enableval} for --enable-jpeg]) ;;
+     esac],[NEED_JPEG=auto])
+
 AG_GST_PKG_CHECK_MODULES(X11_XCB, x11-xcb)
 save_CPPFLAGS="$CPPFLAGS"
 save_LIBS="$LIBS"
@@ -172,15 +199,32 @@ case $host in
         AC_CHECK_LIB([EGL], [fbGetDisplay], [HAVE_VIV_FB_EGL=yes])
     fi
 
-    if test "x$HAVE_EGL" = "xyes"; then
+    if test "x$NEED_GBM" != "xno"; then
+      if test "x$HAVE_EGL" = "xyes"; then
         PKG_CHECK_MODULES(DRM, libdrm >= 2.4.55, HAVE_DRM=yes, HAVE_DRM=no)
         AC_SUBST(DRM_CFLAGS)
         AC_SUBST(DRM_LIBS)
+        if test "x$NEED_GBM" = "xyes"; then
+          if test "x$HAVE_DRM" = "xno"; then
+            AC_MSG_ERROR([GBM support requested but libdrm is not available])
+          fi
+          if test "x$HAVE_GUDEV" = "xno"; then
+            AC_MSG_ERROR([GBM support requested but gudev is not available])
+          fi
+        fi
         if test "x$HAVE_DRM" = "xyes" -a "x$HAVE_GUDEV" = "xyes"; then
           PKG_CHECK_MODULES(GBM, gbm, HAVE_GBM_EGL=yes, HAVE_GBM_EGL=no)
+          if test "x$HAVE_GBM_EGL" = "xno" -a "x$NEED_GBM" = "xyes"; then
+            AC_MSG_ERROR([GBM support requested but gbm library is not available])
+          fi
           AC_SUBST(GBM_CFLAGS)
           AC_SUBST(GBM_LIBS)
-       fi
+        fi
+      elif test "x$NEED_GBM" = "xyes"; then
+        AC_MSG_ERROR([GBM support requested but EGL is not available])
+      else
+        AC_MSG_NOTICE([GBM support requested but EGL is not available; not enabling GBM support])
+      fi
     fi
 
     dnl FIXME: Mali EGL depends on GLESv1 or GLESv2
@@ -231,7 +275,7 @@ case $host in
                             HAVE_EGL=yes
                             HAVE_GLES2=yes
                             HAVE_EGL_RPI=yes
-                            EGL_LIBS="-lbcm_host -lvcos -lvchiq_arm"
+                            EGL_LIBS="-lbcm_host -lvchostif -lvcos -lvchiq_arm"
                             EGL_CFLAGS=""
                             AC_DEFINE(USE_EGL_RPI, [1], [Use RPi platform])
                           ])
@@ -244,7 +288,7 @@ case $host in
     LIBS=$old_LIBS
     CFLAGS=$old_CFLAGS
 
-    PKG_CHECK_MODULES(WAYLAND_EGL, wayland-client >= 1.0 wayland-cursor >= 1.0 wayland-egl >= 9.0, HAVE_WAYLAND_EGL=yes, HAVE_WAYLAND_EGL=no)
+    PKG_CHECK_MODULES(WAYLAND_EGL, wayland-client >= 1.0 wayland-cursor >= 1.0 wayland-egl >= 1.1.3, HAVE_WAYLAND_EGL=yes, HAVE_WAYLAND_EGL=no)
 
     # OS X and iOS always have GL available
     case $host in
@@ -1030,9 +1074,13 @@ dnl Needed by plugins that use g_module_*() API
 PKG_CHECK_MODULES(GMODULE_NO_EXPORT, gmodule-no-export-2.0)
 
 dnl libpng is optional
-PKG_CHECK_MODULES(LIBPNG, libpng >= 1.0, HAVE_PNG=yes, HAVE_PNG=no)
-if test "x$HAVE_PNG" = "xyes"; then
-  AC_DEFINE(HAVE_PNG, [1] , [Use libpng])
+if test "x$NEED_PNG" != "xno"; then
+  PKG_CHECK_MODULES(LIBPNG, libpng >= 1.0, HAVE_PNG=yes, HAVE_PNG=no)
+  if test "x$HAVE_PNG" = "xyes"; then
+    AC_DEFINE(HAVE_PNG, [1] , [Use libpng])
+  elif test "x$NEED_PNG" = "xyes"; then
+    AC_MSG_ERROR([libpng support requested but libpng is not available])
+  fi
 fi
 AC_SUBST(HAVE_PNG)
 AC_SUBST(LIBPNG_LIBS)
@@ -1040,25 +1088,29 @@ AC_SUBST(LIBPNG_CFLAGS)
 
 dnl libjpeg is optional
 AC_ARG_WITH(jpeg-mmx, [  --with-jpeg-mmx, path to MMX'ified JPEG library])
-OLD_LIBS="$LIBS"
-if test x$with_jpeg_mmx != x; then
-  LIBS="$LIBS -L$with_jpeg_mmx"
-fi
-AC_CHECK_LIB(jpeg-mmx, jpeg_set_defaults, HAVE_JPEG="yes", HAVE_JPEG="no")
-JPEG_LIBS="$LIBS -ljpeg-mmx"
-LIBS="$OLD_LIBS"
-if test x$HAVE_JPEG != xyes; then
-  JPEG_LIBS="-ljpeg"
-  AC_CHECK_LIB(jpeg, jpeg_set_defaults, HAVE_JPEG="yes", HAVE_JPEG="no")
-fi
+if test "x$NEED_JPEG" != "xno"; then
+  OLD_LIBS="$LIBS"
+  if test x$with_jpeg_mmx != x; then
+    LIBS="$LIBS -L$with_jpeg_mmx"
+  fi
+  AC_CHECK_LIB(jpeg-mmx, jpeg_set_defaults, HAVE_JPEG="yes", HAVE_JPEG="no")
+  JPEG_LIBS="$LIBS -ljpeg-mmx"
+  LIBS="$OLD_LIBS"
+  if test x$HAVE_JPEG != xyes; then
+    JPEG_LIBS="-ljpeg"
+    AC_CHECK_LIB(jpeg, jpeg_set_defaults, HAVE_JPEG="yes", HAVE_JPEG="no")
+  fi
 
-if test x$HAVE_JPEG = xyes; then
-  AC_DEFINE(HAVE_JPEG, [1], [Use libjpeg])
-else
-  JPEG_LIBS=
+  if test x$HAVE_JPEG = xyes; then
+    AC_DEFINE(HAVE_JPEG, [1], [Use libjpeg])
+  elif test "x$NEED_JPEG" = "xyes"; then
+    AC_MSG_ERROR([libjpeg support requested but libjpeg is not available])
+  else
+    JPEG_LIBS=
+  fi
+  AC_SUBST(JPEG_LIBS)
+  AC_SUBST(HAVE_JPEG)
 fi
-AC_SUBST(JPEG_LIBS)
-AC_SUBST(HAVE_JPEG)
 ])
 
 dnl --------------------------------------------------------------------------

@@ -937,7 +937,7 @@ videoscale_suite (void)
   tcase_add_test (tc_chain, test_reverse_negotiation);
 #endif
   tcase_add_test (tc_chain, test_basetransform_negotiation);
-#elif VSCALE_TEST_GROUP == 1
+#elif defined(VSCALE_TEST_GROUP) && VSCALE_TEST_GROUP == 1
   tcase_add_test (tc_chain, test_downscale_640x480_320x240_method_0);
   tcase_add_test (tc_chain, test_downscale_640x480_320x240_method_1);
   tcase_add_test (tc_chain, test_downscale_640x480_320x240_method_2);
@@ -946,7 +946,7 @@ videoscale_suite (void)
   tcase_add_test (tc_chain, test_upscale_320x240_640x480_method_1);
   tcase_add_test (tc_chain, test_upscale_320x240_640x480_method_2);
   tcase_add_test (tc_chain, test_upscale_320x240_640x480_method_3);
-#elif VSCALE_TEST_GROUP == 2
+#elif defined(VSCALE_TEST_GROUP) && VSCALE_TEST_GROUP == 2
   tcase_add_test (tc_chain, test_downscale_640x480_1x1_method_0);
   tcase_add_test (tc_chain, test_downscale_640x480_1x1_method_1);
   tcase_add_test (tc_chain, test_downscale_640x480_1x1_method_2);
@@ -955,7 +955,7 @@ videoscale_suite (void)
   tcase_add_test (tc_chain, test_upscale_1x1_640x480_method_1);
   tcase_add_test (tc_chain, test_upscale_1x1_640x480_method_2);
   tcase_add_test (tc_chain, test_upscale_1x1_640x480_method_3);
-#elif VSCALE_TEST_GROUP == 3
+#elif defined(VSCALE_TEST_GROUP) && VSCALE_TEST_GROUP == 3
   tcase_add_test (tc_chain, test_downscale_641x481_111x30_method_0);
   tcase_add_test (tc_chain, test_downscale_641x481_111x30_method_1);
   tcase_add_test (tc_chain, test_downscale_641x481_111x30_method_2);
@@ -964,7 +964,7 @@ videoscale_suite (void)
   tcase_add_test (tc_chain, test_upscale_111x30_641x481_method_1);
   tcase_add_test (tc_chain, test_upscale_111x30_641x481_method_2);
   tcase_add_test (tc_chain, test_upscale_111x30_641x481_method_3);
-#elif VSCALE_TEST_GROUP == 4
+#elif defined(VSCALE_TEST_GROUP) && VSCALE_TEST_GROUP == 4
   tcase_add_test (tc_chain, test_downscale_641x481_30x111_method_0);
   tcase_add_test (tc_chain, test_downscale_641x481_30x111_method_1);
   tcase_add_test (tc_chain, test_downscale_641x481_30x111_method_2);
@@ -973,7 +973,7 @@ videoscale_suite (void)
   tcase_add_test (tc_chain, test_upscale_30x111_641x481_method_1);
   tcase_add_test (tc_chain, test_upscale_30x111_641x481_method_2);
   tcase_add_test (tc_chain, test_upscale_30x111_641x481_method_3);
-#elif VSCALE_TEST_GROUP == 5
+#elif defined(VSCALE_TEST_GROUP) && VSCALE_TEST_GROUP == 5
   tcase_add_test (tc_chain, test_downscale_640x480_320x1_method_0);
   tcase_add_test (tc_chain, test_downscale_640x480_320x1_method_1);
   tcase_add_test (tc_chain, test_downscale_640x480_320x1_method_2);
@@ -982,7 +982,7 @@ videoscale_suite (void)
   tcase_add_test (tc_chain, test_upscale_320x1_640x480_method_1);
   tcase_add_test (tc_chain, test_upscale_320x1_640x480_method_2);
   tcase_skip_broken_test (tc_chain, test_upscale_320x1_640x480_method_3);
-#elif VSCALE_TEST_GROUP == 6
+#elif defined(VSCALE_TEST_GROUP) && VSCALE_TEST_GROUP == 6
   tcase_add_test (tc_chain, test_downscale_640x480_1x240_method_0);
   tcase_add_test (tc_chain, test_downscale_640x480_1x240_method_1);
   tcase_add_test (tc_chain, test_downscale_640x480_1x240_method_2);

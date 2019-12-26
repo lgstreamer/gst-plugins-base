@@ -423,6 +423,12 @@ GST_AUDIO_API
 gboolean          gst_audio_decoder_get_needs_format (GstAudioDecoder * dec);
 
 GST_AUDIO_API
+void              gst_audio_decoder_set_use_decoded_timestamp (GstAudioDecoder * dec,
+                                                               gboolean enabled);
+
+GST_AUDIO_API
+gboolean          gst_audio_decoder_get_use_decoded_timestamp (GstAudioDecoder * dec);
+
 void              gst_audio_decoder_get_allocator (GstAudioDecoder * dec,
                                                    GstAllocator ** allocator,
                                                    GstAllocationParams * params);

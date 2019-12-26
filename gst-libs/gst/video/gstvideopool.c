@@ -105,11 +105,9 @@ struct _GstVideoBufferPoolPrivate
 
 static void gst_video_buffer_pool_finalize (GObject * object);
 
-#define GST_VIDEO_BUFFER_POOL_GET_PRIVATE(obj)  \
-   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_VIDEO_BUFFER_POOL, GstVideoBufferPoolPrivate))
-
 #define gst_video_buffer_pool_parent_class parent_class
-G_DEFINE_TYPE (GstVideoBufferPool, gst_video_buffer_pool, GST_TYPE_BUFFER_POOL);
+G_DEFINE_TYPE_WITH_PRIVATE (GstVideoBufferPool, gst_video_buffer_pool,
+    GST_TYPE_BUFFER_POOL);
 
 static const gchar **
 video_buffer_pool_get_options (GstBufferPool * pool)
@@ -301,8 +299,6 @@ gst_video_buffer_pool_class_init (GstVideoBufferPoolClass * klass)
   GObjectClass *gobject_class = (GObjectClass *) klass;
   GstBufferPoolClass *gstbufferpool_class = (GstBufferPoolClass *) klass;
 
-  g_type_class_add_private (klass, sizeof (GstVideoBufferPoolPrivate));
-
   gobject_class->finalize = gst_video_buffer_pool_finalize;
 
   gstbufferpool_class->get_options = video_buffer_pool_get_options;
@@ -316,7 +312,7 @@ gst_video_buffer_pool_class_init (GstVideoBufferPoolClass * klass)
 static void
 gst_video_buffer_pool_init (GstVideoBufferPool * pool)
 {
-  pool->priv = GST_VIDEO_BUFFER_POOL_GET_PRIVATE (pool);
+  pool->priv = gst_video_buffer_pool_get_instance_private (pool);
 }
 
 static void

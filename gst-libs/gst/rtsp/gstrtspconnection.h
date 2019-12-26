@@ -320,6 +320,11 @@ GstRTSPResult      gst_rtsp_watch_wait_backlog       (GstRTSPWatch * watch,
 GST_RTSP_API
 void               gst_rtsp_watch_set_flushing       (GstRTSPWatch * watch,
                                                       gboolean flushing);
+
+GST_RTSP_API
+GstRTSPResult      gst_rtsp_connection_remove_drmheader (GstRTSPConnection * conn,
+                                                      const gchar * drm_header, 
+                                                      GTimeVal * timeout);
 G_END_DECLS
 
 #endif /* __GST_RTSP_CONNECTION_H__ */
