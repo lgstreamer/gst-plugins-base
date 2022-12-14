@@ -67,6 +67,7 @@ static gboolean gst_gl_context_egl_activate (GstGLContext * context,
     gboolean activate);
 static gboolean gst_gl_context_egl_destroy_surface (GstGLContext * context);
 static void gst_gl_context_egl_swap_buffers (GstGLContext * context);
+static void gst_gl_context_egl_make_current (GstGLContext * context);
 static guintptr gst_gl_context_egl_get_gl_context (GstGLContext * context);
 static GstGLAPI gst_gl_context_egl_get_gl_api (GstGLContext * context);
 static GstGLPlatform gst_gl_context_egl_get_gl_platform (GstGLContext *
@@ -96,6 +97,8 @@ gst_gl_context_egl_class_init (GstGLContextEGLClass * klass)
       GST_DEBUG_FUNCPTR (gst_gl_context_egl_choose_format);
   context_class->swap_buffers =
       GST_DEBUG_FUNCPTR (gst_gl_context_egl_swap_buffers);
+  context_class->make_current =
+      GST_DEBUG_FUNCPTR (gst_gl_context_egl_make_current);
 
   context_class->get_gl_api = GST_DEBUG_FUNCPTR (gst_gl_context_egl_get_gl_api);
   context_class->get_gl_platform =
@@ -721,6 +724,17 @@ gst_gl_context_egl_swap_buffers (GstGLContext * context)
   egl = GST_GL_CONTEXT_EGL (context);
 
   eglSwapBuffers (egl->egl_display, egl->egl_surface);
+}
+
+static void
+gst_gl_context_egl_make_current (GstGLContext * context)
+{
+  GstGLContextEGL *egl;
+
+  egl = GST_GL_CONTEXT_EGL (context);
+
+  eglMakeCurrent (egl->egl_display, egl->egl_surface,
+      egl->egl_surface, egl->egl_context);
 }
 
 static GstGLAPI

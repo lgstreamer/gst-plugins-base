@@ -516,6 +516,9 @@ draw_cb (gpointer data)
     gst_gl_window_resize (window, width, height);
   }
 
+  /* For egl window resize */
+  gst_gl_context_make_current (context);
+
   start = g_get_monotonic_time ();
 
   if (window->draw)

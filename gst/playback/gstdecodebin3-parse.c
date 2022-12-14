@@ -267,10 +267,12 @@ parse_chain_output_probe (GstPad * pad, GstPadProbeInfo * info,
               gst_object_unref (input->active_stream);
             input->active_stream = stream;
             /* We have the beginning of a stream, get a multiqueue slot and link to it */
+            REASSIGN_LOCK (input->dbin);
             SELECTION_LOCK (input->dbin);
             slot = get_slot_for_input (input->dbin, input);
             link_input_to_slot (input->input, input, slot);
             SELECTION_UNLOCK (input->dbin);
+            REASSIGN_UNLOCK (input->dbin);
           } else
             gst_object_unref (stream);
         }
@@ -511,10 +513,12 @@ parsebin_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
       input_stream->active_stream = stream;
       INPUT_UNLOCK (dbin);
 
+      REASSIGN_LOCK (dbin);
       SELECTION_LOCK (dbin);
       slot = get_slot_for_input (dbin, input_stream);
       link_input_to_slot (input, input_stream, slot);
       SELECTION_UNLOCK (dbin);
+      REASSIGN_UNLOCK (dbin);
 
       /* Remove the buffer and event probe */
       INPUT_LOCK (dbin);

@@ -1816,6 +1816,18 @@ gst_gl_context_swap_buffers (GstGLContext * context)
   context_class->swap_buffers (context);
 }
 
+void
+gst_gl_context_make_current (GstGLContext * context)
+{
+  GstGLContextClass *context_class;
+
+  g_return_if_fail (GST_IS_GL_CONTEXT (context));
+  context_class = GST_GL_CONTEXT_GET_CLASS (context);
+  g_return_if_fail (context_class->make_current != NULL);
+
+  context_class->make_current (context);
+}
+
 static GstGLAPI
 gst_gl_wrapped_context_get_gl_api (GstGLContext * context)
 {

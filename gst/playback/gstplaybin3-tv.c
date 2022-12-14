@@ -150,23 +150,27 @@ check_backend_needs_gap (gpointer data)
       if (target_group->audio_sink) {
         target_sink = target_group->audio_sink;
       } else {
+        GST_SOURCE_GROUP_UNLOCK (target_group);
         GST_PLAY_BIN3_UNLOCK (playbin);
         target_sink =
             gst_play_sink_get_sink (playbin->playsink,
             GST_PLAY_SINK_TYPE_AUDIO);
         unref = TRUE;
         GST_PLAY_BIN3_LOCK (playbin);
+        GST_SOURCE_GROUP_LOCK (target_group);
       }
     } else {
       if (target_group->video_sink) {
         target_sink = target_group->video_sink;
       } else {
+        GST_SOURCE_GROUP_UNLOCK (target_group);
         GST_PLAY_BIN3_UNLOCK (playbin);
         target_sink =
             gst_play_sink_get_sink (playbin->playsink,
             GST_PLAY_SINK_TYPE_VIDEO);
         unref = TRUE;
         GST_PLAY_BIN3_LOCK (playbin);
+        GST_SOURCE_GROUP_LOCK (target_group);
       }
     }
 
@@ -616,12 +620,14 @@ priv_play_bin3_send_event (GstPlayBin3 * playbin, GstEvent * event,
   GstSourceGroup *target_group = NULL;
   target_group = get_group (playbin);
 
-  if (!target_group->adaptive_mode && playbin->adaptivedemux
-      && GST_EVENT_TYPE (event) == GST_EVENT_SEEK) {
-    GST_SYS_LOG_OBJECT (playbin,
-        "Directly send seek event to adaptivedemux: %" GST_PTR_FORMAT, event);
-    gst_element_send_event (playbin->adaptivedemux, event);
-    *steal = TRUE;
+  if (GST_EVENT_TYPE (event) == GST_EVENT_SEEK) {
+    if (!target_group->dvr_playback && (!target_group->adaptive_mode
+            && playbin->adaptivedemux)) {
+      GST_SYS_LOG_OBJECT (playbin,
+          "Directly send seek event to adaptivedemux: %" GST_PTR_FORMAT, event);
+      gst_element_send_event (playbin->adaptivedemux, event);
+      *steal = TRUE;
+    }
   }
 
   return res;
@@ -710,6 +716,7 @@ priv_init_group (GstPlayBin3 * playbin, GstSourceGroup * group)
   group->gap_seqnum = 0;
   group->timeout_id = 0;
   group->use_fallback_preroll = FALSE;
+  group->last_collection_seqnum = GST_SEQNUM_INVALID;
   GST_LOG_OBJECT (playbin, "Initialized group %p", group);
 }
 
@@ -724,5 +731,6 @@ priv_free_group (GstPlayBin3 * playbin, GstSourceGroup * group)
     group->timeout_id = 0;
   }
   group->use_fallback_preroll = FALSE;
+  group->last_collection_seqnum = GST_SEQNUM_INVALID;
   GST_LOG_OBJECT (playbin, "Released group %p", group);
 }

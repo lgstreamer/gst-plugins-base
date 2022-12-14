@@ -267,6 +267,8 @@ struct _GstSourceCombine
   gboolean has_active_pad;      /* stream combiner has the "active-pad" property */
 
   gboolean is_concat;           /* The stream combiner is the 'concat' element */
+
+  GPtrArray *unused_pads;
 };
 
 #define GST_SOURCE_GROUP_GET_LOCK(group) (&((GstSourceGroup*)(group))->lock)
@@ -415,6 +417,8 @@ struct _GstSourceGroup
 
   /* For digital video recoding playback */
   gboolean dvr_playback;
+
+  guint32 last_collection_seqnum;
 };
 
 #define GST_PLAY_BIN3_GET_LOCK(bin) (&((GstPlayBin3*)(bin))->lock)
@@ -472,6 +476,7 @@ struct _GstPlayBin3
 
   /* Array of GstPad controlled by each combiner */
   GPtrArray *channels[PLAYBIN_STREAM_LAST];     /* links to combiner pads */
+  GPtrArray *unused_pads[PLAYBIN_STREAM_LAST];
 
   /* combiners for different streams */
   GstSourceCombine combiner[PLAYBIN_STREAM_LAST];
@@ -1176,13 +1181,16 @@ init_combiners (GstPlayBin3 * playbin)
   gint i;
 
   /* store the array for the different channels */
-  for (i = 0; i < PLAYBIN_STREAM_LAST; i++)
+  for (i = 0; i < PLAYBIN_STREAM_LAST; i++) {
     playbin->channels[i] = g_ptr_array_new ();
+    playbin->unused_pads[i] = g_ptr_array_new ();
+  }
 
   playbin->combiner[PLAYBIN_STREAM_AUDIO].media_type = "audio";
   playbin->combiner[PLAYBIN_STREAM_AUDIO].type = GST_PLAY_SINK_TYPE_AUDIO;
   playbin->combiner[PLAYBIN_STREAM_AUDIO].stream_type = GST_STREAM_TYPE_AUDIO;
   playbin->combiner[PLAYBIN_STREAM_AUDIO].channels = playbin->channels[0];
+  playbin->combiner[PLAYBIN_STREAM_AUDIO].unused_pads = playbin->unused_pads[0];
   playbin->combiner[PLAYBIN_STREAM_AUDIO].streams =
       g_ptr_array_new_with_free_func ((GDestroyNotify) gst_object_unref);
 
@@ -1190,6 +1198,7 @@ init_combiners (GstPlayBin3 * playbin)
   playbin->combiner[PLAYBIN_STREAM_VIDEO].type = GST_PLAY_SINK_TYPE_VIDEO;
   playbin->combiner[PLAYBIN_STREAM_VIDEO].stream_type = GST_STREAM_TYPE_VIDEO;
   playbin->combiner[PLAYBIN_STREAM_VIDEO].channels = playbin->channels[1];
+  playbin->combiner[PLAYBIN_STREAM_VIDEO].unused_pads = playbin->unused_pads[1];
   playbin->combiner[PLAYBIN_STREAM_VIDEO].streams =
       g_ptr_array_new_with_free_func ((GDestroyNotify) gst_object_unref);
 
@@ -1199,6 +1208,7 @@ init_combiners (GstPlayBin3 * playbin)
   playbin->combiner[PLAYBIN_STREAM_TEXT].type = GST_PLAY_SINK_TYPE_TEXT;
   playbin->combiner[PLAYBIN_STREAM_TEXT].stream_type = GST_STREAM_TYPE_TEXT;
   playbin->combiner[PLAYBIN_STREAM_TEXT].channels = playbin->channels[2];
+  playbin->combiner[PLAYBIN_STREAM_TEXT].unused_pads = playbin->unused_pads[2];
   playbin->combiner[PLAYBIN_STREAM_TEXT].streams =
       g_ptr_array_new_with_free_func ((GDestroyNotify) gst_object_unref);
 }
@@ -1476,8 +1486,10 @@ gst_play_bin3_finalize (GObject * object)
   free_group (playbin, &playbin->groups[0]);
   free_group (playbin, &playbin->groups[1]);
 
-  for (i = 0; i < PLAYBIN_STREAM_LAST; i++)
+  for (i = 0; i < PLAYBIN_STREAM_LAST; i++) {
     g_ptr_array_free (playbin->channels[i], TRUE);
+    g_ptr_array_free (playbin->unused_pads[i], TRUE);
+  }
 
   /* Setting states to NULL is safe here because playsink
    * will already be gone and none of these sinks will be
@@ -2607,6 +2619,10 @@ gst_play_bin3_handle_message (GstBin * bin, GstMessage * msg)
 
     /* Only post buffering messages for group which is currently playing */
     group = find_source_group_owner (playbin, msg->src);
+    if (group == NULL) {
+      GST_DEBUG_OBJECT (playbin, "group is null");
+      goto beach;
+    }
     GST_SOURCE_GROUP_LOCK (group);
     if (!group->playing) {
       GST_DEBUG_OBJECT (playbin, "Storing buffering message from pending group "
@@ -2630,9 +2646,23 @@ gst_play_bin3_handle_message (GstBin * bin, GstMessage * msg)
           "STREAM_COLLECTION: Got a collection from %" GST_PTR_FORMAT,
           msg->src);
       target_group = find_source_group_owner (playbin, msg->src);
-      if (target_group)
+
+      if (target_group) {
+        guint32 collection_seqnum = gst_message_get_seqnum (msg);
+        if (target_group->last_collection_seqnum != GST_SEQNUM_INVALID
+            && target_group->last_collection_seqnum > collection_seqnum) {
+          GST_WARNING_OBJECT (playbin,
+              "Collection msg is not delivered in order. from(seq:%u) to(seq:%u)",
+              target_group->last_collection_seqnum, collection_seqnum);
+          gst_message_unref (msg);
+          gst_object_unref (collection);
+          GST_PLAY_BIN3_UNLOCK (playbin);
+          return;
+        }
+        target_group->last_collection_seqnum = collection_seqnum;
         gst_object_replace ((GstObject **) & target_group->collection,
             (GstObject *) collection);
+      }
       /* FIXME: Only do the following if it's the current group? */
       if (target_group == playbin->curr_group)
         update_combiner_info (playbin, target_group->collection);
@@ -2962,6 +2992,15 @@ remove_combiner (GstPlayBin3 * playbin, GstSourceCombine * combine)
     return;
   }
 
+  /* Go over all unused pads and release them ! */
+  for (n = 0; n < combine->unused_pads->len; n++) {
+    GstPad *sinkpad = g_ptr_array_index (combine->unused_pads, n);
+    GST_DEBUG_OBJECT (playbin, "Remove Unused Pads(%s:%s)",
+        GST_DEBUG_PAD_NAME (sinkpad));
+    g_ptr_array_remove (combine->unused_pads, sinkpad);
+  }
+  g_ptr_array_set_size (combine->unused_pads, 0);
+
   /* Go over all sink pads and release them ! */
   for (n = 0; n < combine->channels->len; n++) {
     GstPad *sinkpad = g_ptr_array_index (combine->channels, n);
@@ -3034,6 +3073,8 @@ combiner_control_pad (GstPlayBin3 * playbin, GstSourceCombine * combine,
     GstPad * srcpad)
 {
   GstPadLinkReturn res;
+  gint n;
+  GstSourceGroup *group = get_group (playbin);
 
   GST_DEBUG_OBJECT (playbin, "srcpad %" GST_PTR_FORMAT, srcpad);
 
@@ -3052,6 +3093,9 @@ combiner_control_pad (GstPlayBin3 * playbin, GstSourceCombine * combine,
         sinkpad);
     g_ptr_array_add (combine->channels, sinkpad);
 
+    /* store combiner pad so we can release it */
+    g_object_set_data (G_OBJECT (srcpad), "playbin3.sinkpad", sinkpad);
+
     res = gst_pad_link (srcpad, sinkpad);
     if (GST_PAD_LINK_FAILED (res))
       goto failed_combiner_link;
@@ -3059,6 +3103,19 @@ combiner_control_pad (GstPlayBin3 * playbin, GstSourceCombine * combine,
     GST_DEBUG_OBJECT (playbin,
         "linked pad %" GST_PTR_FORMAT " to combiner %" GST_PTR_FORMAT, srcpad,
         combine->combiner);
+    if (group && group->dvr_playback) {
+      /* Go over all sink pads and release them ! */
+      for (n = 0; n < combine->unused_pads->len; n++) {
+        GstPad *combiner_sinkpad = g_ptr_array_index (combine->unused_pads, n);
+
+        g_ptr_array_remove (combine->unused_pads, combiner_sinkpad);
+        g_ptr_array_remove (combine->channels, combiner_sinkpad);
+        GST_DEBUG_OBJECT (playbin, "Release Unused Pads(%s:%s)",
+            GST_DEBUG_PAD_NAME (combiner_sinkpad));
+        gst_element_release_request_pad (combine->combiner, combiner_sinkpad);
+        gst_object_unref (combiner_sinkpad);
+      }
+    }
 
   } else {
     GST_LOG_OBJECT (playbin, "combine->sinkpad:%" GST_PTR_FORMAT,
@@ -3109,6 +3166,37 @@ combiner_release_pad (GstPlayBin3 * playbin, GstSourceCombine * combine,
 {
   if (combine->combiner) {
     GstPad *peer = gst_pad_get_peer (pad);
+    GstSourceGroup *group = get_group (playbin);
+    if (group && group->dvr_playback && !peer) {
+      GstPad *combiner_sinkpad = NULL;
+      GST_WARNING_OBJECT (pad, "No peerpad !!");
+      /* get the combiner sinkpad when it is already unlinked */
+      combiner_sinkpad = g_object_get_data (G_OBJECT (pad), "playbin3.sinkpad");
+      if (combiner_sinkpad && combine->combiner) {
+        GstElement *parent = gst_pad_get_parent (combiner_sinkpad);
+        if (!parent) {
+          GST_DEBUG_OBJECT (pad, "No combiner element !!");
+        } else {
+          /* Go over all sink pads and release unused pads ! */
+          if (combine->channels->len > 1) {
+            g_ptr_array_remove (combine->unused_pads, combiner_sinkpad);
+            g_ptr_array_remove (combine->channels, combiner_sinkpad);
+            GST_DEBUG_OBJECT (playbin,
+                "Release Unused Pads(%s:%s) to switch pad",
+                GST_DEBUG_PAD_NAME (combiner_sinkpad));
+            gst_element_release_request_pad (combine->combiner,
+                combiner_sinkpad);
+            gst_object_unref (combiner_sinkpad);
+          } else {
+            /* store the pad in the array */
+            GST_FIXME_OBJECT (playbin, "Found peerpad(%s:%s). Added to array",
+                GST_DEBUG_PAD_NAME (combiner_sinkpad));
+            g_ptr_array_add (combine->unused_pads, combiner_sinkpad);
+            gst_object_unref (parent);
+          }
+        }
+      }
+    }
 
     if (peer) {
       GST_DEBUG_OBJECT (playbin, "Removing combiner pad %" GST_PTR_FORMAT,

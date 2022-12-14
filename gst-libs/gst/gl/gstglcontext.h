@@ -132,6 +132,7 @@ struct _GstGLContextClass {
                                        GstGLContext *other_context, GError ** error);
   void          (*destroy_context)    (GstGLContext *context);
   void          (*swap_buffers)       (GstGLContext *context);
+  void          (*make_current)       (GstGLContext *context);
   gboolean      (*check_feature)      (GstGLContext *context, const gchar *feature);
   void          (*get_gl_platform_version) (GstGLContext *context, gint *major, gint *minor);
 
@@ -172,6 +173,8 @@ GST_GL_API
 gboolean      gst_gl_context_can_share        (GstGLContext * context, GstGLContext *other_context);
 GST_GL_API
 void          gst_gl_context_swap_buffers     (GstGLContext * context);
+GST_GL_API
+void          gst_gl_context_make_current     (GstGLContext * context);
 
 GST_GL_API
 gboolean      gst_gl_context_create           (GstGLContext *context, GstGLContext *other_context, GError ** error);
